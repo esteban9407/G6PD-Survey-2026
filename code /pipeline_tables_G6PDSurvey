@@ -1,0 +1,1561 @@
+# ==============================================================================
+# SCRIPT   : pipeline_tables_G6PDSurvey.R
+# PROJECT  : G6PD Survey — Quibdó, Chocó, Colombia
+# AUTHORS  : Juan Esteban Martínez López - Grupo Malaria, Universidad de Antioquia
+#            Daniel Camilo Aguirre Acevedo - Instituto de Investigaciones Médicas, Universidad de Antioquia           
+# CONTACT  : jesteban.martinez@udea.edu.co
+# CREATED  : 2025
+# UPDATED  : 2026
+# ------------------------------------------------------------------------------
+# PURPOSE  : Generate all publication-ready tables (Table 1, Table 2, Table 3,
+#            S1-S4 Tables). All tables are exported to Excel (.xlsx) via openxlsx.
+# ------------------------------------------------------------------------------
+# INPUT    : bd_G6PDSurvey_2026 — object already loaded in the R environment.
+#            Participant exclusions (8 specific IDs) are applied to `df`
+#            in Section 1, BEFORE any table is built -- this applies to ALL
+#            tables in this script (Table 1, Table 2, S1-S4 Tables, Table 3).
+#            If the object is not already loaded, SECTION 0b below loads it
+#            from the raw Excel file.
+# OUTPUT   : Table1_G6PD_2026.xlsx
+#            Table2_G6PD_2026.xlsx
+#            Table3_G6PD_2026.xlsx
+#            TableS1_G6PD_2026.xlsx
+#            TableS2_G6PD_2026.xlsx
+#            TableS3_G6PD_2026.xlsx
+#            TableS4_G6PD_2026.xlsx
+# ==============================================================================
+
+# ==============================================================================
+# SECTION 0 — Libraries
+# ==============================================================================
+library(dplyr)
+library(tidyr)
+library(survey)
+library(openxlsx)
+library(readxl)   # only used by SECTION 0b, to load raw data if not already present
+library(geeasy)   # GEE models for Table 3 / S4 Table (Group 1, weighted, clustered)
+
+# MASS is loaded as a NAMESPACE ONLY (not attached with library()).
+# `confint()` on a glm object dispatches to MASS::confint.glm (profile
+# likelihood) if the MASS namespace has been loaded -- this is what
+# extract_glm_pr() in Section 8 relies on, confirmed empirically to
+# reproduce the original .qmd's CIs exactly. Attaching MASS with
+# library(MASS) is NOT necessary and would mask dplyr::select() with
+# MASS::select(), silently breaking the bare select() calls already used
+# in Table 1 / S1 / S2 Table above.
+requireNamespace("MASS", quietly = TRUE)
+
+# ==============================================================================
+# SECTION 0b — Load raw data (only if not already in the R environment)
+# ------------------------------------------------------------------------------
+# The rest of the script assumes `bd_G6PDSurvey_2026` already exists in memory
+# with exclusions applied. This block only loads it from disk if that is not
+# the case, so the script can also be run standalone.
+# ==============================================================================
+if (!exists("bd_G6PDSurvey_2026")) {
+  bd_G6PDSurvey_2026 <- read_excel("bd_G6PDSurvey_2026.xlsx")
+}
+
+set.seed(0934)
+options(scipen = 999)
+# ==============================================================================
+# SECTION 1 — Data preparation
+# ------------------------------------------------------------------------------
+# Source  : bd_G6PDSurvey_2026 (exclusions already applied)
+# Action  : Replace sentinel missing values (−999, −9999, 999) with NA.
+#           A single working copy (df) is used throughout the entire script.
+# ==============================================================================
+# DATA DICTIONARY — variables used across all tables
+# ------------------------------------------------------------------------------
+# id_compuesto : Participant unique ID
+# lugar        : Recruitment site  | 1 = General population
+#                                  | 2 = Outpatients
+#                                  | 3 = Indigenous
+# sex          : Biological sex    | 1 = Female  | 2 = Male
+# etnia        : Ethnicity         | 1 = Afro-Colombian | 2 = Indigenous | 3 = Other
+# edad         : Age in years (continuous)
+# edadhemo     : Age group | 1 = 5–11 years | 2 = 12–14 years | 3 = ≥15 years
+# FI0005       : Consanguinity between parents | 1 = Yes | 2 = No
+# FI0015       : Years of residence (continuous)
+# FI0015cd     : Years of residence (binary) | 0 = <5 years | 1 = ≥5 years
+# FI0017       : Overnight absence last 3 months | 1 = Yes | 2 = No
+# FI0021       : Malaria transmission in place visited | 1 = Yes | 2 = No | 3 = DK
+# FI0022       : Ethnicity (self-report 5-cat) | 1=Mestizo | 2=Afro | 3=White
+#                                              | 4=Indigenous | 5=Other
+# FI0023       : Prior diagnosis of G6PD deficiency | 1 = Yes
+# FI0024       : Prior diagnosis of hemolytic anemia | 1 = Yes
+# FI0030       : Hospitalized due to hemolytic event | 1 = Yes (if FI0024==1)
+# FI0031       : Prior blood transfusion | 1 = Yes
+# FI0035       : Previous malaria diagnosis | 1 = Yes | 2 = No | 3 = DK
+# FI0036       : Lifetime malaria episodes (continuous)
+# FI0037       : Time since last episode | 1–3 = <6 months | 4–5 = ≥6 months
+#                                        | 6 = Does not remember
+# FI0040       : PQ intake with last malaria episode | 1 = Yes
+# FI0041       : Adverse event to PQ | 1 = Yes (if FI0040==1)
+# FI0042       : Adverse event symptom (free text)
+# FI0046       : Fever last 3 days | 1 = Yes | 2 = No
+# FI0080       : Binary G6PD | 0 = Normal/Intermediate | 1 = Deficient
+# FI0081       : Binary G6PD | 0 = Normal | 1 = Deficient/Intermediate
+# FI5356       : Final G6PD enzyme activity (UI/gHb) — continuous
+# FI5457       : G6PD interpretation | 1 = Normal | 2 = Intermediate | 3 = Deficient
+# FI5558       : Hemoglobin final value (g/dL)
+# MAH          : WHO classification | 1 = <30% | 2 = 30–70% | 3 = >70%
+# PCR06r       : Malaria result (binary) | 0 = Negative | 1 = Positive
+# PCR_final    : Final molecular diagnosis
+#                  1 = Negative | 2 = Species not identified | 3 = Mixed
+#                  4 = P. falciparum | 5 = P. vivax
+# weight       : Sampling weight (Group 1 only)
+# comuna/barrio: Used to build PSU (Group 1 only)
+# cod_viv      : Household cluster ID (GEE only)
+# ------------------------------------------------------------------------------
+
+{
+  df <- bd_G6PDSurvey_2026
+
+  # Replace all sentinel missing values with NA
+  df[df == -999 | df == -9999 | df == 999] <- NA
+
+  # Participant exclusion -- applies to ALL tables in this script
+  # (Table 1, Table 2, S1-S4 Tables, Table 3).
+  exclude_ids <- c("10112701", "800127", "800032", "50214001",
+                   "9051803", "10333502", "50104501", "700219")
+  df$id_compuesto_chr <- trimws(as.character(df$id_compuesto))
+  df <- df[!df$id_compuesto_chr %in% exclude_ids, ]
+}
+
+# ==============================================================================
+# SECTION 2 — Shared survey infrastructure (Groups 1–4)
+# ------------------------------------------------------------------------------
+# Group 1: General population (lugar == 1) — complex survey design with weights
+# Group 2: Indigenous (lugar == 3)         — no weights
+# Group 3: Outpatients (lugar == 2)        — no weights
+# Group 4: Outpatients Afro-Colombian only (lugar == 2, etnia == 1) — no weights
+# PSU and FPC are used only for Group 1.
+# ==============================================================================
+{
+  # Build PSU identifier
+  df <- df %>%
+    mutate(
+      psu = paste0(comuna, "0", barrio),
+      psu = ifelse(comuna == 10, paste0(comuna, barrio), psu)
+    )
+
+  # Finite population correction table (Group 1 only)
+  fpcprevalence <- data.frame(
+    psu    = c("1002","1003","1004","1005","1006","1007","1008",
+               "101","102","103","104","105","106",
+               "202","301","501","502","503","604","601","603"),
+    fcpval = c(36,45,14,79,91,477,172,
+               225,217,434,369,453,366,
+               310,328,99,462,37,113,161,28)
+  )
+}
+
+# ==============================================================================
+# SECTION 3 — Table 1: Demographic, epidemiological, and clinical characteristics
+# ==============================================================================
+
+# --- Data subsets ---
+{
+  df_t1 <- df
+
+  # Impute ethnicity for Indigenous community participants (by design, all are Indigenous)
+  df_t1$etnia[df_t1$lugar == 3 & is.na(df_t1$etnia)] <- 3L
+
+  df_t1 <- df_t1 %>% filter(lugar %in% c(1, 2, 3))
+
+  # BUGFIX
+  n1 <- nrow(df_t1 %>% filter(lugar == 1))
+  n2 <- nrow(df_t1 %>% filter(lugar == 3))
+  n3 <- nrow(df_t1 %>% filter(lugar == 2))
+
+  col_g1 <- paste0("General population (Group 1) (n=", n1, ")")
+  col_g2 <- paste0("Indigenous (Group 2) (n=",         n2, ")")
+  col_g3 <- paste0("Outpatients (Group 3) (n=",        n3, ")")
+
+  # Main dataset with group factor in display order: Group 1 / Group 2 / Group 3
+  df_t1 <- df_t1 %>%
+    mutate(grupo = factor(lugar,
+      levels = c(1, 3, 2),
+      labels = c(col_g1, col_g2, col_g3)
+    ))
+
+  g1_t1 <- df_t1                           # full dataset
+  g2_t1 <- df_t1 %>% filter(FI0017 == 1)  # overnight absence == Yes
+  g3_t1 <- df_t1 %>% filter(FI0035 == 1)  # previous malaria == Yes
+}
+
+# --- Helper functions ---
+
+# n (%) — denominator: non-missing in var_name
+pct_row <- function(data, var_name, vals, label) {
+  data %>%
+    group_by(grupo, .drop = FALSE) %>%
+    summarise(
+      n_match = sum(.data[[var_name]] %in% vals, na.rm = TRUE),
+      n_denom = sum(!is.na(.data[[var_name]])),
+      .groups = "drop"
+    ) %>%
+    mutate(val = paste0(n_match, " (", round(n_match / n_denom * 100, 1), "%)")) %>%
+    select(grupo, val) %>%
+    pivot_wider(names_from = grupo, values_from = val) %>%
+    mutate(Variable = label) %>%
+    select(Variable, everything())
+}
+
+# n (%) — denominator: total group n (includes NA rows, for PCR section)
+pct_row_total <- function(data, var_name, vals, label) {
+  data %>%
+    group_by(grupo, .drop = FALSE) %>%
+    summarise(
+      n_match = sum(.data[[var_name]] %in% vals, na.rm = TRUE),
+      n_denom = n(),
+      .groups = "drop"
+    ) %>%
+    mutate(val = paste0(n_match, " (", round(n_match / n_denom * 100, 1), "%)")) %>%
+    select(grupo, val) %>%
+    pivot_wider(names_from = grupo, values_from = val) %>%
+    mutate(Variable = label) %>%
+    select(Variable, everything())
+}
+
+# n (%) — denominator: custom subset of PCR_final values
+pct_row_denom <- function(data, var_name, vals, denom_vals, label) {
+  data %>%
+    group_by(grupo, .drop = FALSE) %>%
+    summarise(
+      n_match = sum(.data[[var_name]] %in% vals, na.rm = TRUE),
+      n_denom = sum(.data[[var_name]] %in% denom_vals, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(val = ifelse(n_denom == 0, "NA",
+      paste0(n_match, " (", round(n_match / n_denom * 100, 1), "%)"))) %>%
+    select(grupo, val) %>%
+    pivot_wider(names_from = grupo, values_from = val) %>%
+    mutate(Variable = label) %>%
+    select(Variable, everything())
+}
+
+# n (%) of NA rows
+na_row <- function(data, var_name, label) {
+  data %>%
+    group_by(grupo, .drop = FALSE) %>%
+    summarise(
+      n_match = sum(is.na(.data[[var_name]])),
+      n_denom = n(),
+      .groups = "drop"
+    ) %>%
+    mutate(val = paste0(n_match, " (", round(n_match / n_denom * 100, 1), "%)")) %>%
+    select(grupo, val) %>%
+    pivot_wider(names_from = grupo, values_from = val) %>%
+    mutate(Variable = label) %>%
+    select(Variable, everything())
+}
+
+# mean (SD) for a continuous variable
+mean_sd_row <- function(data, var_name, label) {
+  data %>%
+    group_by(grupo, .drop = FALSE) %>%
+    summarise(
+      val = paste0(
+        round(mean(.data[[var_name]], na.rm = TRUE), 1),
+        " (", round(sd(.data[[var_name]], na.rm = TRUE), 1), ")"
+      ),
+      .groups = "drop"
+    ) %>%
+    pivot_wider(names_from = grupo, values_from = val) %>%
+    mutate(Variable = label) %>%
+    select(Variable, everything())
+}
+
+# blank section header
+header_row_t1 <- function(label) {
+  tibble(Variable = label, !!col_g1 := "", !!col_g2 := "", !!col_g3 := "")
+}
+
+# --- Build rows ---
+{
+  rows_t1 <- bind_rows(
+    pct_row(g1_t1, "sex",      1,           "Female, n (%)"),
+    mean_sd_row(g1_t1, "edad",              "Age, years, mean (SD)"),
+
+    header_row_t1("Age group, n (%)"),
+    pct_row(g1_t1, "edadhemo", 1,           "   5–11 years"),
+    pct_row(g1_t1, "edadhemo", 2,           "   12–14 years"),
+    pct_row(g1_t1, "edadhemo", 3,           "   ≥15 years"),
+
+    header_row_t1("Ethnic group (self-report), n (%)"),
+    pct_row(g1_t1, "etnia",    2,           "   Indigenous"),
+    pct_row(g1_t1, "etnia",    1,           "   Afro-Colombian"),
+    pct_row(g1_t1, "etnia",    3,           "   Other"),
+
+    pct_row(g1_t1, "FI0005",   1,           "Consanguinity between parents, n (%)"),
+    mean_sd_row(g1_t1, "FI0015",            "Years of residence in the study location, mean (SD)"),
+    pct_row(g1_t1, "FI0017",   1,           "Sleep at least one night outside the residence in the last three months, n (%)"),
+    pct_row(g2_t1, "FI0021",   1,           "   Malaria transmission in the place visited, n (%)"),
+
+    pct_row(g1_t1, "FI0035",   1,           "Previous diagnosis of malaria, n (%)"),
+    mean_sd_row(g3_t1, "FI0036",            "   Lifetime malaria episodes, mean (SD)"),
+
+    header_row_t1("   Time since last episode, n (%)"),
+    pct_row(g3_t1, "FI0037",   c(1,2,3),   "      Less than six months"),
+    pct_row(g3_t1, "FI0037",   c(4,5),     "      More than six months"),
+    pct_row(g3_t1, "FI0037",   6,           "      Does not remember"),
+
+    pct_row(g1_t1, "FI0046",   1,           "Fever in the last three days, n (%)"),
+    mean_sd_row(g1_t1, "FI5558",            "Hemoglobin (Hb, g/dL), mean (SD)"),
+
+    header_row_t1("Plasmodium infection by PCR"),
+    pct_row_total(g1_t1, "PCR_final", 1,           "   Negative"),
+    pct_row_total(g1_t1, "PCR_final", c(2,3,4,5),  "   Plasmodium positive"),
+    pct_row_denom(g1_t1, "PCR_final", 5, c(2,3,4,5), "      P. vivax"),
+    pct_row_denom(g1_t1, "PCR_final", 4, c(2,3,4,5), "      P. falciparum"),
+    pct_row_denom(g1_t1, "PCR_final", 3, c(2,3,4,5), "      Mixed P. falciparum/P. vivax"),
+    pct_row_denom(g1_t1, "PCR_final", 2, c(2,3,4,5), "      Species not determined"),
+    na_row(g1_t1, "PCR_final",                        "   Not processed")
+  )
+}
+
+# --- Export ---
+{
+  wb <- createWorkbook()
+  addWorksheet(wb, "Table 1")
+
+  writeData(wb, "Table 1",
+    "Table 1. Frequency of demographic, epidemiological, and clinical characteristics of study participants",
+    startRow = 1, startCol = 1)
+  mergeCells(wb, "Table 1", cols = 1:4, rows = 1)
+  addStyle(wb, "Table 1",
+    createStyle(fontSize = 11, fontName = "Arial", textDecoration = "bold", wrapText = TRUE),
+    rows = 1, cols = 1)
+
+  writeData(wb, "Table 1", rows_t1, startRow = 3, startCol = 1, colNames = TRUE)
+
+  addStyle(wb, "Table 1",
+    createStyle(fontSize = 9, fontName = "Arial", textDecoration = "bold",
+                halign = "center", border = "TopBottom", wrapText = TRUE),
+    rows = 3, cols = 1:4, gridExpand = TRUE)
+
+  addStyle(wb, "Table 1",
+    createStyle(fontSize = 9, fontName = "Arial", wrapText = FALSE),
+    rows = 4:(nrow(rows_t1) + 3), cols = 1:4, gridExpand = TRUE)
+
+  setColWidths(wb, "Table 1", cols = 1,   widths = 55)
+  setColWidths(wb, "Table 1", cols = 2:4, widths = 22)
+  freezePane(wb, "Table 1", firstRow = TRUE)
+
+  fn_row <- nrow(rows_t1) + 5
+  writeData(wb, "Table 1",
+    "SD: Standard deviation. DK: Does not know. * Conditional on previous malaria diagnosis.",
+    startRow = fn_row, startCol = 1)
+  addStyle(wb, "Table 1",
+    createStyle(fontSize = 8, fontName = "Arial", fontColour = "#777777"),
+    rows = fn_row, cols = 1)
+
+  saveWorkbook(wb, "Table1_G6PD_2026.xlsx", overwrite = TRUE)
+  message("Table1_G6PD_2026.xlsx saved")
+}
+
+
+# ==============================================================================
+# SECTION 4 — Table 2: G6PD enzyme activity and prevalence of G6PD status
+# ==============================================================================
+
+# --- Data subsets and survey design ---
+{
+  g1_t2 <- df %>% filter(lugar == 1, !is.na(FI5356)) %>%
+    left_join(fpcprevalence, by = "psu")
+
+  svy1_t2 <- svydesign(id = ~1, weights = ~weight, strata = ~psu,
+                       fcp = ~fcpval, nest = TRUE, data = g1_t2)
+
+  g2_t2 <- df %>% filter(lugar == 3, !is.na(FI5356))
+  g3_t2 <- df %>% filter(lugar == 2, !is.na(FI5356))
+  g4_t2 <- df %>% filter(lugar == 2, etnia == 1, !is.na(FI5356))
+}
+
+# --- Adjusted median (exclude males at or below 10th percentile) ---
+{
+  thr1 <- as.numeric(quantile(g1_t2$FI5356, 0.10, na.rm = TRUE))
+  thr2 <- as.numeric(quantile(g2_t2$FI5356, 0.10, na.rm = TRUE))
+  thr3 <- as.numeric(quantile(g3_t2$FI5356, 0.10, na.rm = TRUE))
+  thr4 <- as.numeric(quantile(g4_t2$FI5356, 0.10, na.rm = TRUE))
+
+  message(sprintf("Thresholds — G1: %.2f | G2: %.2f | G3: %.2f | G4: %.2f",
+                  thr1, thr2, thr3, thr4))
+
+  g1_t2_adj <- g1_t2 %>% filter(!(sex == 2 & FI5356 <= thr1))
+  g2_t2_adj <- g2_t2 %>% filter(!(sex == 2 & FI5356 <= thr2))
+  g3_t2_adj <- g3_t2 %>% filter(!(sex == 2 & FI5356 <= thr3))
+  g4_t2_adj <- g4_t2 %>% filter(!(sex == 2 & FI5356 <= thr4))
+
+  svy1_t2_adj <- svydesign(id = ~1, weights = ~weight, strata = ~psu,
+                            fcp = ~fcpval, nest = TRUE, data = g1_t2_adj)
+}
+
+# --- Helper functions ---
+
+# Median [IQR] — unweighted
+fmt_median_iqr <- function(x) {
+  x <- x[!is.na(x)]
+  paste0(
+    sprintf("%.2f", median(x)), " [",
+    sprintf("%.2f", quantile(x, 0.25)), ", ",
+    sprintf("%.2f", quantile(x, 0.75)), "]"
+  )
+}
+
+# Median [IQR] — weighted
+fmt_svy_median_iqr <- function(design, var) {
+  q    <- svyquantile(as.formula(paste0("~", var)),
+                      design, quantiles = c(0.25, 0.5, 0.75), na.rm = TRUE)
+  vals <- as.numeric(q[[1]])
+  paste0(
+    sprintf("%.2f", vals[2]), " [",
+    sprintf("%.2f", vals[1]), ", ",
+    sprintf("%.2f", vals[3]), "]"
+  )
+}
+
+# Prevalence % [95% CI] — unweighted
+fmt_prev_t2 <- function(x_logical, n_total) {
+  n_pos <- sum(x_logical, na.rm = TRUE)
+  if (n_pos == 0 || n_total == 0) return("NA")
+  pt <- prop.test(n_pos, n_total)
+  paste0(
+    sprintf("%.1f%%", n_pos / n_total * 100), " [",
+    sprintf("%.1f", pt$conf.int[1] * 100), "–",
+    sprintf("%.1f", pt$conf.int[2] * 100), "]"
+  )
+}
+
+# Prevalence % [95% CI] — weighted
+fmt_svy_prev_t2 <- function(design, formula_str) {
+  f   <- as.formula(formula_str)
+  est <- svyciprop(f, design, na.rm = TRUE)
+  ci  <- attr(est, "ci")
+  if (as.numeric(est) == 0) return("NA")
+  paste0(
+    sprintf("%.1f%%", as.numeric(est) * 100), " [",
+    sprintf("%.1f", ci[1] * 100), "–",
+    sprintf("%.1f", ci[2] * 100), "]"
+  )
+}
+
+# One row across four groups
+make_row_t2 <- function(label, g1_val, g2_val, g3_val, g4_val) {
+  tibble(
+    Variable                                                                       = label,
+    `General population (Group 1) (n=1263)`                                       = g1_val,
+    `Indigenous (Group 2) (n=193)`                                                 = g2_val,
+    `Outpatients (Group 3) (n=539)`                                                = g3_val,
+    `Outpatients restricted to Afro-Colombians (subgroup of Group 3) (n=397)`     = g4_val
+  )
+}
+
+header_row_t2 <- function(label) make_row_t2(label, "", "", "", "")
+
+# --- Build rows ---
+{
+  rows_t2 <- bind_rows(
+
+    header_row_t2("G6PD activity UI/g Hb; Median [IQR]"),
+
+    make_row_t2("Overall",
+      fmt_svy_median_iqr(svy1_t2,     "FI5356"),
+      fmt_median_iqr(g2_t2$FI5356),
+      fmt_median_iqr(g3_t2$FI5356),
+      fmt_median_iqr(g4_t2$FI5356)
+    ),
+    make_row_t2("Overall adjusted*",
+      fmt_svy_median_iqr(svy1_t2_adj, "FI5356"),
+      fmt_median_iqr(g2_t2_adj$FI5356),
+      fmt_median_iqr(g3_t2_adj$FI5356),
+      fmt_median_iqr(g4_t2_adj$FI5356)
+    ),
+
+    header_row_t2("Sex"),
+    make_row_t2("   Female",
+      fmt_svy_median_iqr(subset(svy1_t2, sex == 1), "FI5356"),
+      fmt_median_iqr(g2_t2$FI5356[g2_t2$sex == 1]),
+      fmt_median_iqr(g3_t2$FI5356[g3_t2$sex == 1]),
+      fmt_median_iqr(g4_t2$FI5356[g4_t2$sex == 1])
+    ),
+    make_row_t2("   Male",
+      fmt_svy_median_iqr(subset(svy1_t2, sex == 2), "FI5356"),
+      fmt_median_iqr(g2_t2$FI5356[g2_t2$sex == 2]),
+      fmt_median_iqr(g3_t2$FI5356[g3_t2$sex == 2]),
+      fmt_median_iqr(g4_t2$FI5356[g4_t2$sex == 2])
+    ),
+
+    header_row_t2("Ethnicity"),
+    make_row_t2("   Afro-Colombians",
+      fmt_svy_median_iqr(subset(svy1_t2, etnia == 1), "FI5356"),
+      "NA",
+      fmt_median_iqr(g3_t2$FI5356[g3_t2$etnia == 1]),
+      fmt_median_iqr(g4_t2$FI5356)
+    ),
+    make_row_t2("   Indigenous",
+      "NA",
+      fmt_median_iqr(g2_t2$FI5356[g2_t2$etnia == 2]),
+      fmt_median_iqr(g3_t2$FI5356[g3_t2$etnia == 2]),
+      "NA"
+    ),
+    make_row_t2("   Other",
+      fmt_svy_median_iqr(subset(svy1_t2, etnia == 3), "FI5356"),
+      "NA",
+      fmt_median_iqr(g3_t2$FI5356[g3_t2$etnia == 3]),
+      "NA"
+    ),
+
+    header_row_t2("Prevalence of G6PD status, % [95% CI]"),
+
+    make_row_t2("Deficient",
+      fmt_svy_prev_t2(svy1_t2,                       "~FI0080 == 1"),
+      fmt_prev_t2(g2_t2$FI0080 == 1,                 nrow(g2_t2)),
+      fmt_prev_t2(g3_t2$FI0080 == 1,                 nrow(g3_t2)),
+      fmt_prev_t2(g4_t2$FI0080 == 1,                 nrow(g4_t2))
+    ),
+    make_row_t2("   Female",
+      fmt_svy_prev_t2(subset(svy1_t2, sex == 1),     "~FI0080 == 1"),
+      fmt_prev_t2(g2_t2$FI0080[g2_t2$sex==1] == 1,  sum(g2_t2$sex==1, na.rm=TRUE)),
+      fmt_prev_t2(g3_t2$FI0080[g3_t2$sex==1] == 1,  sum(g3_t2$sex==1, na.rm=TRUE)),
+      fmt_prev_t2(g4_t2$FI0080[g4_t2$sex==1] == 1,  sum(g4_t2$sex==1, na.rm=TRUE))
+    ),
+    make_row_t2("   Male",
+      fmt_svy_prev_t2(subset(svy1_t2, sex == 2),     "~FI0080 == 1"),
+      fmt_prev_t2(g2_t2$FI0080[g2_t2$sex==2] == 1,  sum(g2_t2$sex==2, na.rm=TRUE)),
+      fmt_prev_t2(g3_t2$FI0080[g3_t2$sex==2] == 1,  sum(g3_t2$sex==2, na.rm=TRUE)),
+      fmt_prev_t2(g4_t2$FI0080[g4_t2$sex==2] == 1,  sum(g4_t2$sex==2, na.rm=TRUE))
+    ),
+    make_row_t2("Intermediate (female)**",
+      fmt_svy_prev_t2(svy1_t2,        "~FI5457 == 2"),
+      fmt_prev_t2(g2_t2$FI5457 == 2,  nrow(g2_t2)),
+      fmt_prev_t2(g3_t2$FI5457 == 2,  nrow(g3_t2)),
+      fmt_prev_t2(g4_t2$FI5457 == 2,  nrow(g4_t2))
+    ),
+
+    header_row_t2("Prevalence of G6PD status, WHO classification*; % [95% CI]"),
+
+    make_row_t2("<30%",
+      fmt_svy_prev_t2(svy1_t2, "~MAH == 1"),
+      fmt_prev_t2(g2_t2$MAH == 1, nrow(g2_t2)),
+      fmt_prev_t2(g3_t2$MAH == 1, nrow(g3_t2)),
+      fmt_prev_t2(g4_t2$MAH == 1, nrow(g4_t2))
+    ),
+    make_row_t2("30\u201369%",
+      fmt_svy_prev_t2(svy1_t2, "~MAH == 2"),
+      fmt_prev_t2(g2_t2$MAH == 2, nrow(g2_t2)),
+      fmt_prev_t2(g3_t2$MAH == 2, nrow(g3_t2)),
+      fmt_prev_t2(g4_t2$MAH == 2, nrow(g4_t2))
+    ),
+    make_row_t2("\u226570%",
+      fmt_svy_prev_t2(svy1_t2, "~MAH == 3"),
+      fmt_prev_t2(g2_t2$MAH == 3, nrow(g2_t2)),
+      fmt_prev_t2(g3_t2$MAH == 3, nrow(g3_t2)),
+      fmt_prev_t2(g4_t2$MAH == 3, nrow(g4_t2))
+    )
+  )
+}
+
+# --- Export ---
+{
+  wb <- createWorkbook()
+  addWorksheet(wb, "Table 2")
+
+  writeData(wb, "Table 2",
+    "Table 2. Glucose-6-Phosphate Dehydrogenase (G6PD) enzymatic activity value (IIU/g/Hb) and prevalence of G6PD status, overall and by subgroups.",
+    startRow = 1, startCol = 1)
+  mergeCells(wb, "Table 2", cols = 1:5, rows = 1)
+  addStyle(wb, "Table 2",
+    createStyle(fontSize = 11, fontName = "Arial", textDecoration = "bold", wrapText = TRUE),
+    rows = 1, cols = 1)
+
+  writeData(wb, "Table 2", rows_t2, startRow = 3, startCol = 1, colNames = TRUE)
+
+  addStyle(wb, "Table 2",
+    createStyle(fontSize = 9, fontName = "Arial", textDecoration = "bold",
+                halign = "center", border = "TopBottom", wrapText = TRUE),
+    rows = 3, cols = 1:5, gridExpand = TRUE)
+
+  addStyle(wb, "Table 2",
+    createStyle(fontSize = 9, fontName = "Arial"),
+    rows = 4:(nrow(rows_t2) + 3), cols = 1:5, gridExpand = TRUE)
+
+  setColWidths(wb, "Table 2", cols = 1,   widths = 48)
+  setColWidths(wb, "Table 2", cols = 2:5, widths = 24)
+  freezePane(wb, "Table 2", firstRow = TRUE)
+
+  fn_row <- nrow(rows_t2) + 5
+  writeData(wb, "Table 2", paste0(
+    "IQR: Interquartile Range. WHO: World Health Organization. NA: Not applicable.\n",
+    "* The adjusted median was calculated by excluding males with G6PD activity at or below the 10th percentile of the group distribution.\n",
+    "** Although males are not classified as intermediate by the STANDARD G6PD test, frequencies of males with enzyme levels between 4.1 and 6 IIU/g Hb were reported.\n",
+    "\u2020 The estimates consider the sample weights."
+  ), startRow = fn_row, startCol = 1)
+  addStyle(wb, "Table 2",
+    createStyle(fontSize = 8, fontName = "Arial", fontColour = "#555555", wrapText = TRUE),
+    rows = fn_row, cols = 1)
+  setRowHeights(wb, "Table 2", rows = fn_row, heights = 60)
+
+  saveWorkbook(wb, "Table2_G6PD_2026.xlsx", overwrite = TRUE)
+  message("Table2_G6PD_2026.xlsx saved")
+}
+
+# ==============================================================================
+# SECTION 5 — S1 Table: Plasmodium prevalence by group, ethnicity, sex, and malaria history
+# ==============================================================================
+
+# --- Data subsets and survey design ---
+{
+  df_s1 <- df %>%
+    mutate(
+      psu    = paste0(comuna, "0", barrio),
+      psu    = ifelse(comuna == 10, paste0(comuna, barrio), psu),
+      FI1721 = ifelse(FI0017 == 1 & FI0021 == 1, 1L, 2L)
+    )
+
+  g1_s1 <- df_s1 %>% filter(lugar == 1) %>%
+    left_join(fpcprevalence, by = "psu")
+
+  svy1_s1 <- svydesign(id = ~1, weights = ~weight, strata = ~psu,
+                        fcp = ~fcpval, nest = TRUE, data = g1_s1)
+
+  g2_s1 <- df_s1 %>% filter(lugar == 3)
+  g3_s1 <- df_s1 %>% filter(lugar == 2)
+
+  col_s1_g1 <- paste0("General population, Group 1 (n=", nrow(g1_s1), ") % Plasmodium positive (95% CI)")
+  col_s1_g2 <- paste0("Indigenous population, Group 2 (n=", nrow(g2_s1), ") % Plasmodium positive (95% CI)")
+  col_s1_g3 <- paste0("Outpatients, Group 3 (n=", nrow(g3_s1), ") % Plasmodium positive (95% CI)")
+}
+
+# --- Helper functions ---
+
+fmt_prev_s1 <- function(x_logical, n_total) {
+  n_pos <- sum(x_logical, na.rm = TRUE)
+  if (n_pos == 0 || n_total == 0 || all(is.na(x_logical))) return("NA")
+  pt <- prop.test(n_pos, n_total)
+  paste0(
+    sprintf("%.1f%%", n_pos / n_total * 100), " (",
+    sprintf("%.1f", pt$conf.int[1] * 100), "\u2013",
+    sprintf("%.1f", pt$conf.int[2] * 100), "%)"
+  )
+}
+
+fmt_svy_prev_s1 <- function(design, formula_str) {
+  f   <- as.formula(formula_str)
+  est <- tryCatch(svyciprop(f, design, na.rm = TRUE), error = function(e) NULL)
+  if (is.null(est) || as.numeric(est) == 0) return("NA")
+  ci <- attr(est, "ci")
+  paste0(
+    sprintf("%.1f%%", as.numeric(est) * 100), " (",
+    sprintf("%.1f", ci[1] * 100), "\u2013",
+    sprintf("%.1f", ci[2] * 100), "%)"
+  )
+}
+
+make_row_s1 <- function(label, g1_val, g2_val, g3_val) {
+  tibble(
+    Variable      = label,
+    !!col_s1_g1  := g1_val,
+    !!col_s1_g2  := g2_val,
+    !!col_s1_g3  := g3_val
+  )
+}
+
+header_row_s1 <- function(label) make_row_s1(label, "", "", "")
+
+# --- Build rows ---
+{
+  rows_s1 <- bind_rows(
+
+    header_row_s1("Ethnicity (self-report)"),
+    make_row_s1("   Afro-Colombian",
+      fmt_svy_prev_s1(subset(svy1_s1, etnia == 1), "~PCR06r == 1"),
+      fmt_prev_s1(g2_s1$PCR06r[g2_s1$etnia == 1] == 1, sum(g2_s1$etnia == 1, na.rm = TRUE)),
+      fmt_prev_s1(g3_s1$PCR06r[g3_s1$etnia == 1] == 1, sum(g3_s1$etnia == 1, na.rm = TRUE))
+    ),
+    make_row_s1("   Indigenous",
+      fmt_svy_prev_s1(subset(svy1_s1, etnia == 2), "~PCR06r == 1"),
+      fmt_prev_s1(g2_s1$PCR06r[g2_s1$etnia == 2] == 1, sum(g2_s1$etnia == 2, na.rm = TRUE)),
+      fmt_prev_s1(g3_s1$PCR06r[g3_s1$etnia == 2] == 1, sum(g3_s1$etnia == 2, na.rm = TRUE))
+    ),
+    make_row_s1("   Other",
+      fmt_svy_prev_s1(subset(svy1_s1, etnia == 3), "~PCR06r == 1"),
+      fmt_prev_s1(g2_s1$PCR06r[g2_s1$etnia == 3] == 1, sum(g2_s1$etnia == 3, na.rm = TRUE)),
+      fmt_prev_s1(g3_s1$PCR06r[g3_s1$etnia == 3] == 1, sum(g3_s1$etnia == 3, na.rm = TRUE))
+    ),
+
+    header_row_s1("Sex"),
+    make_row_s1("   Female",
+      fmt_svy_prev_s1(subset(svy1_s1, sex == 1), "~PCR06r == 1"),
+      fmt_prev_s1(g2_s1$PCR06r[g2_s1$sex == 1] == 1, sum(g2_s1$sex == 1, na.rm = TRUE)),
+      fmt_prev_s1(g3_s1$PCR06r[g3_s1$sex == 1] == 1, sum(g3_s1$sex == 1, na.rm = TRUE))
+    ),
+    make_row_s1("   Male",
+      fmt_svy_prev_s1(subset(svy1_s1, sex == 2), "~PCR06r == 1"),
+      fmt_prev_s1(g2_s1$PCR06r[g2_s1$sex == 2] == 1, sum(g2_s1$sex == 2, na.rm = TRUE)),
+      fmt_prev_s1(g3_s1$PCR06r[g3_s1$sex == 2] == 1, sum(g3_s1$sex == 2, na.rm = TRUE))
+    ),
+
+    header_row_s1("Residence and travel history"),
+    make_row_s1("   Residence in the study location at least one year",
+      fmt_svy_prev_s1(subset(svy1_s1, FI0015cd == 1), "~PCR06r == 1"),
+      fmt_prev_s1(g2_s1$PCR06r[g2_s1$FI0015cd == 1] == 1, sum(g2_s1$FI0015cd == 1, na.rm = TRUE)),
+      fmt_prev_s1(g3_s1$PCR06r[g3_s1$FI0015cd == 1] == 1, sum(g3_s1$FI0015cd == 1, na.rm = TRUE))
+    ),
+    make_row_s1("   Slept at least one night outside the residence in a place with malaria transmission (in last 3 months)",
+      fmt_svy_prev_s1(subset(svy1_s1, FI1721 == 1), "~PCR06r == 1"),
+      fmt_prev_s1(g2_s1$PCR06r[g2_s1$FI1721 == 1] == 1, sum(g2_s1$FI1721 == 1, na.rm = TRUE)),
+      fmt_prev_s1(g3_s1$PCR06r[g3_s1$FI1721 == 1] == 1, sum(g3_s1$FI1721 == 1, na.rm = TRUE))
+    ),
+
+    header_row_s1("Clinical history of malaria"),
+    make_row_s1("   Previous diagnosis of malaria",
+      fmt_svy_prev_s1(subset(svy1_s1, FI0035 == 1), "~PCR06r == 1"),
+      fmt_prev_s1(g2_s1$PCR06r[g2_s1$FI0035 == 1] == 1, sum(g2_s1$FI0035 == 1, na.rm = TRUE)),
+      fmt_prev_s1(g3_s1$PCR06r[g3_s1$FI0035 == 1] == 1, sum(g3_s1$FI0035 == 1, na.rm = TRUE))
+    ),
+    make_row_s1("   Less than six months since prior episode of malaria",
+      fmt_svy_prev_s1(subset(svy1_s1, FI0035 == 1 & FI0037 %in% c(1,2,3)), "~PCR06r == 1"),
+      fmt_prev_s1(
+        g2_s1$PCR06r[g2_s1$FI0035 == 1 & g2_s1$FI0037 %in% c(1,2,3)] == 1,
+        sum(g2_s1$FI0035 == 1 & g2_s1$FI0037 %in% c(1,2,3), na.rm = TRUE)
+      ),
+      fmt_prev_s1(
+        g3_s1$PCR06r[g3_s1$FI0035 == 1 & g3_s1$FI0037 %in% c(1,2,3)] == 1,
+        sum(g3_s1$FI0035 == 1 & g3_s1$FI0037 %in% c(1,2,3), na.rm = TRUE)
+      )
+    )
+  )
+}
+
+# --- Export ---
+{
+  wb <- createWorkbook()
+  addWorksheet(wb, "S1 Table")
+
+  writeData(wb, "S1 Table",
+    "S1 Table. Prevalence of Plasmodium spp. infection, by study group, ethnicity, sex and history of malaria.",
+    startRow = 1, startCol = 1)
+  mergeCells(wb, "S1 Table", cols = 1:4, rows = 1)
+  addStyle(wb, "S1 Table",
+    createStyle(fontSize = 11, fontName = "Arial", textDecoration = "bold", wrapText = TRUE),
+    rows = 1, cols = 1)
+  setRowHeights(wb, "S1 Table", rows = 1, heights = 30)
+
+  writeData(wb, "S1 Table", rows_s1, startRow = 3, startCol = 1, colNames = TRUE)
+
+  addStyle(wb, "S1 Table",
+    createStyle(fontSize = 9, fontName = "Arial", textDecoration = "bold",
+                halign = "center", border = "TopBottom", wrapText = TRUE),
+    rows = 3, cols = 1:4, gridExpand = TRUE)
+  setRowHeights(wb, "S1 Table", rows = 3, heights = 50)
+
+  addStyle(wb, "S1 Table",
+    createStyle(fontSize = 9, fontName = "Arial", wrapText = TRUE),
+    rows = 4:(nrow(rows_s1) + 3), cols = 1:4, gridExpand = TRUE)
+
+  setColWidths(wb, "S1 Table", cols = 1,   widths = 48)
+  setColWidths(wb, "S1 Table", cols = 2:4, widths = 22)
+  freezePane(wb, "S1 Table", firstRow = TRUE)
+
+  fn_row <- nrow(rows_s1) + 5
+  writeData(wb, "S1 Table",
+    "NA: Not applicable.\n* Estimates consider sample weights.",
+    startRow = fn_row, startCol = 1)
+  addStyle(wb, "S1 Table",
+    createStyle(fontSize = 8, fontName = "Arial", fontColour = "#555555", wrapText = TRUE),
+    rows = fn_row, cols = 1)
+
+  saveWorkbook(wb, "TableS1_G6PD_2026.xlsx", overwrite = TRUE)
+  message("TableS1_G6PD_2026.xlsx saved")
+}
+
+
+# ==============================================================================
+# SECTION 6 — S2 Table: Self-reported hemolysis history and adverse events to PQ
+# ==============================================================================
+
+# --- Data subsets ---
+{
+  df_s2 <- df %>%
+    mutate(
+      FI0042_norm  = toupper(trimws(
+        iconv(as.character(FI0042), from = "UTF-8", to = "ASCII//TRANSLIT")
+      )),
+      FI0042_norm  = ifelse(is.na(FI0042_norm), NA, FI0042_norm),
+      ae_dizziness = !is.na(FI0042_norm) & grepl("MAREO",       FI0042_norm),
+      ae_vomiting  = !is.na(FI0042_norm) & grepl("VOMIT",       FI0042_norm),
+      ae_other     = !is.na(FI0042_norm) &
+                     !grepl("MAREO|VOMIT", FI0042_norm) &
+                     FI0042_norm != ""
+    )
+
+  g_def  <- df_s2 %>% filter(FI5457 == 3)
+  g_int  <- df_s2 %>% filter(FI5457 == 2)
+  g_norm <- df_s2 %>% filter(FI5457 == 1)
+
+  g_def_hemo  <- g_def  %>% filter(FI0024 == 1)
+  g_int_hemo  <- g_int  %>% filter(FI0024 == 1)
+  g_norm_hemo <- g_norm %>% filter(FI0024 == 1)
+
+  g_def_pq  <- g_def  %>% filter(FI0040 == 1)
+  g_int_pq  <- g_int  %>% filter(FI0040 == 1)
+  g_norm_pq <- g_norm %>% filter(FI0040 == 1)
+
+  g_def_ae  <- g_def  %>% filter(FI0041 == 1)
+  g_int_ae  <- g_int  %>% filter(FI0041 == 1)
+  g_norm_ae <- g_norm %>% filter(FI0041 == 1)
+
+  col_def  <- paste0("Deficient (n=",    nrow(g_def),  ")")
+  col_int  <- paste0("Intermediate (n=", nrow(g_int),  ")")
+  col_norm <- paste0("Normal (n=",       nrow(g_norm), ")")
+}
+
+# --- Helper functions ---
+
+fmt_n_pct_s2 <- function(x_logical, n_denom) {
+  n <- sum(x_logical, na.rm = TRUE)
+  if (n_denom == 0) return("0 (0%)")
+  paste0(n, " (", round(n / n_denom * 100, 1), "%)")
+}
+
+make_row_s2 <- function(label, def_val, int_val, norm_val) {
+  tibble(
+    Variable      = label,
+    !!col_def    := def_val,
+    !!col_int    := int_val,
+    !!col_norm   := norm_val
+  )
+}
+
+header_row_s2 <- function(label) make_row_s2(label, "", "", "")
+
+# --- Build rows ---
+{
+  rows_s2 <- bind_rows(
+
+    make_row_s2("Prior diagnosis of G6PD deficiency",
+      fmt_n_pct_s2(g_def$FI0023  == 1, nrow(g_def)),
+      fmt_n_pct_s2(g_int$FI0023  == 1, nrow(g_int)),
+      fmt_n_pct_s2(g_norm$FI0023 == 1, nrow(g_norm))
+    ),
+    make_row_s2("Prior diagnosis of hemolytic anemia",
+      fmt_n_pct_s2(g_def$FI0024  == 1, nrow(g_def)),
+      fmt_n_pct_s2(g_int$FI0024  == 1, nrow(g_int)),
+      fmt_n_pct_s2(g_norm$FI0024 == 1, nrow(g_norm))
+    ),
+    make_row_s2("   Prior hospitalization due to a hemolytic event\u00a7",
+      fmt_n_pct_s2(g_def_hemo$FI0030  == 1, nrow(g_def_hemo)),
+      fmt_n_pct_s2(g_int_hemo$FI0030  == 1, nrow(g_int_hemo)),
+      fmt_n_pct_s2(g_norm_hemo$FI0030 == 1, nrow(g_norm_hemo))
+    ),
+    make_row_s2("Prior history of blood transfusion",
+      fmt_n_pct_s2(g_def$FI0031  == 1, nrow(g_def)),
+      fmt_n_pct_s2(g_int$FI0031  == 1, nrow(g_int)),
+      fmt_n_pct_s2(g_norm$FI0031 == 1, nrow(g_norm))
+    ),
+    make_row_s2("PQ intake with last episode of malaria",
+      fmt_n_pct_s2(g_def$FI0040  == 1, nrow(g_def)),
+      fmt_n_pct_s2(g_int$FI0040  == 1, nrow(g_int)),
+      fmt_n_pct_s2(g_norm$FI0040 == 1, nrow(g_norm))
+    ),
+    make_row_s2("   Adverse event to PQ in last episode of malaria",
+      fmt_n_pct_s2(g_def_pq$FI0041  == 1, nrow(g_def_pq)),
+      fmt_n_pct_s2(g_int_pq$FI0041  == 1, nrow(g_int_pq)),
+      fmt_n_pct_s2(g_norm_pq$FI0041 == 1, nrow(g_norm_pq))
+    ),
+
+    header_row_s2("      Adverse event symptoms"),
+
+    make_row_s2("         Dizziness",
+      fmt_n_pct_s2(g_def_ae$ae_dizziness,  nrow(g_def_ae)),
+      fmt_n_pct_s2(g_int_ae$ae_dizziness,  nrow(g_int_ae)),
+      fmt_n_pct_s2(g_norm_ae$ae_dizziness, nrow(g_norm_ae))
+    ),
+    make_row_s2("         Vomiting",
+      fmt_n_pct_s2(g_def_ae$ae_vomiting,  nrow(g_def_ae)),
+      fmt_n_pct_s2(g_int_ae$ae_vomiting,  nrow(g_int_ae)),
+      fmt_n_pct_s2(g_norm_ae$ae_vomiting, nrow(g_norm_ae))
+    ),
+    make_row_s2("         Other*",
+      fmt_n_pct_s2(g_def_ae$ae_other,  nrow(g_def_ae)),
+      fmt_n_pct_s2(g_int_ae$ae_other,  nrow(g_int_ae)),
+      fmt_n_pct_s2(g_norm_ae$ae_other, nrow(g_norm_ae))
+    )
+  )
+}
+
+# --- Export ---
+{
+  wb <- createWorkbook()
+  addWorksheet(wb, "S2 Table")
+
+  writeData(wb, "S2 Table",
+    "S2 Table. Self-reported responses to questions relating to prior history of hemolysis and adverse events (AE) after intake of primaquine (PQ), by glucose-6-phosphase dehydrogenase (G6PD) measured in the study",
+    startRow = 1, startCol = 1)
+  mergeCells(wb, "S2 Table", cols = 1:4, rows = 1)
+  addStyle(wb, "S2 Table",
+    createStyle(fontSize = 11, fontName = "Arial", textDecoration = "bold", wrapText = TRUE),
+    rows = 1, cols = 1)
+  setRowHeights(wb, "S2 Table", rows = 1, heights = 45)
+
+  writeData(wb, "S2 Table", rows_s2, startRow = 3, startCol = 1, colNames = TRUE)
+
+  addStyle(wb, "S2 Table",
+    createStyle(fontSize = 9, fontName = "Arial", textDecoration = "bold",
+                halign = "center", border = "TopBottom", wrapText = TRUE),
+    rows = 3, cols = 1:4, gridExpand = TRUE)
+  setRowHeights(wb, "S2 Table", rows = 3, heights = 40)
+
+  addStyle(wb, "S2 Table",
+    createStyle(fontSize = 9, fontName = "Arial", wrapText = TRUE),
+    rows = 4:(nrow(rows_s2) + 3), cols = 1:4, gridExpand = TRUE)
+
+  setColWidths(wb, "S2 Table", cols = 1,   widths = 52)
+  setColWidths(wb, "S2 Table", cols = 2:4, widths = 18)
+  freezePane(wb, "S2 Table", firstRow = TRUE)
+
+  fn_row <- nrow(rows_s2) + 5
+  writeData(wb, "S2 Table", paste0(
+    "\u00a7 Percentage calculated among participants who had prior diagnosis of hemolytic anemia\n",
+    "* Other included: malaise, nausea, diarrhea, pruritis, diarrhea with vomiting and cramps; ",
+    "all participants denied dark urine and jaundice."
+  ), startRow = fn_row, startCol = 1)
+  addStyle(wb, "S2 Table",
+    createStyle(fontSize = 8, fontName = "Arial", fontColour = "#555555", wrapText = TRUE),
+    rows = fn_row, cols = 1)
+  setRowHeights(wb, "S2 Table", rows = fn_row, heights = 40)
+
+  saveWorkbook(wb, "TableS2_G6PD_2026.xlsx", overwrite = TRUE)
+  message("TableS2_G6PD_2026.xlsx saved")
+}
+
+
+# ==============================================================================
+# SECTION 7 — S3 Table: Plasmodium prevalence by G6PD status and study group
+# ==============================================================================
+
+# --- Data subsets and survey design ---
+{
+  g1_s3 <- df %>% filter(lugar == 1, !is.na(FI5457), !is.na(PCR_final)) %>%
+    left_join(fpcprevalence, by = "psu")
+
+  svy1_s3 <- svydesign(id = ~1, weights = ~weight, strata = ~psu,
+                        fcp = ~fcpval, nest = TRUE, data = g1_s3)
+
+  g3_s3 <- df %>% filter(lugar == 2, !is.na(FI5457), !is.na(PCR_final))
+  g4_s3 <- df %>% filter(lugar == 2, etnia == 1, !is.na(FI5457), !is.na(PCR_final))
+
+  # Dynamic column headers
+  n_g1_norm <- nrow(g1_s3 %>% filter(FI5457 == 1))
+  n_g1_int  <- nrow(g1_s3 %>% filter(FI5457 == 2))
+  n_g1_def  <- nrow(g1_s3 %>% filter(FI5457 == 3))
+  n_g3_norm <- nrow(g3_s3 %>% filter(FI5457 == 1))
+  n_g3_int  <- nrow(g3_s3 %>% filter(FI5457 == 2))
+  n_g3_def  <- nrow(g3_s3 %>% filter(FI5457 == 3))
+  n_g4_norm <- nrow(g4_s3 %>% filter(FI5457 == 1))
+  n_g4_int  <- nrow(g4_s3 %>% filter(FI5457 == 2))
+  n_g4_def  <- nrow(g4_s3 %>% filter(FI5457 == 3))
+
+  c_g1n <- paste0("General population\nNormal\n(n=",                             n_g1_norm, ")\n% (95% CI)")
+  c_g1i <- paste0("General population\nInt\n(n=",                                n_g1_int,  ")\n% (95% CI)")
+  c_g1d <- paste0("General population\nDeficient\n(n=",                          n_g1_def,  ")\n% (95% CI)")
+  c_g3n <- paste0("Outpatients\nNormal\n(n=",                                    n_g3_norm, ")\n% (95% CI)")
+  c_g3i <- paste0("Outpatients\nInt\n(n=",                                       n_g3_int,  ")\n% (95% CI)")
+  c_g3d <- paste0("Outpatients\nDeficient\n(n=",                                 n_g3_def,  ")\n% (95% CI)")
+  c_g4n <- paste0("Outpatients restricted to Afro-Colombians\nNormal\n(n=",      n_g4_norm, ")\n% (95% CI)")
+  c_g4i <- paste0("Outpatients restricted to Afro-Colombians\nInt\n(n=",         n_g4_int,  ")\n% (95% CI)")
+  c_g4d <- paste0("Outpatients restricted to Afro-Colombians\nDeficient\n(n=",   n_g4_def,  ")\n% (95% CI)")
+}
+
+# --- Helper functions ---
+
+fmt_prev_s3 <- function(x_logical, n_total) {
+  n_pos <- sum(x_logical, na.rm = TRUE)
+  if (n_pos == 0 || n_total == 0 || all(is.na(x_logical))) return("NA")
+  pt <- prop.test(n_pos, n_total)
+  paste0(
+    sprintf("%.1f%%", n_pos / n_total * 100), " (",
+    sprintf("%.1f", pt$conf.int[1] * 100), "\u2013",
+    sprintf("%.1f", pt$conf.int[2] * 100), "%)"
+  )
+}
+
+fmt_svy_prev_s3 <- function(design, formula_str) {
+  f   <- as.formula(formula_str)
+  est <- tryCatch(svyciprop(f, design, na.rm = TRUE), error = function(e) NULL)
+  if (is.null(est) || as.numeric(est) == 0) return("NA")
+  ci <- attr(est, "ci")
+  paste0(
+    sprintf("%.1f%%", as.numeric(est) * 100), " (",
+    sprintf("%.1f", ci[1] * 100), "\u2013",
+    sprintf("%.1f", ci[2] * 100), "%)"
+  )
+}
+
+# One cell: prevalence of pcr_vals within a single FI5457 level — unweighted
+cell_prev_s3 <- function(data, fi5457_val, pcr_vals) {
+  sub <- data %>% filter(FI5457 == fi5457_val)
+  fmt_prev_s3(sub$PCR_final %in% pcr_vals, nrow(sub))
+}
+
+# One cell: prevalence of pcr_vals within a single FI5457 level — weighted
+cell_svy_s3 <- function(design, fi5457_val, pcr_vals) {
+  sub <- subset(design, FI5457 == fi5457_val)
+  fmt_svy_prev_s3(sub,
+    paste0("~PCR_final %in% c(", paste(pcr_vals, collapse = ","), ")"))
+}
+
+# --- Build rows ---
+{
+  make_row_s3 <- function(label, vals) {
+    row <- as.list(vals)
+    names(row) <- c(c_g1n, c_g1i, c_g1d, c_g3n, c_g3i, c_g3d, c_g4n, c_g4i, c_g4d)
+    tibble(Variable = label, !!!row)
+  }
+
+  pcr_rows_s3 <- list(
+    list(label = "No malaria",       pcr = 1),
+    list(label = "Plasmodium spp.",  pcr = c(2, 3)),
+    list(label = "P. falciparum",    pcr = 4),
+    list(label = "P. vivax",         pcr = 5)
+  )
+
+  rows_s3 <- bind_rows(lapply(pcr_rows_s3, function(r) {
+    make_row_s3(r$label, c(
+      cell_svy_s3(svy1_s3, 1, r$pcr), cell_svy_s3(svy1_s3, 2, r$pcr), cell_svy_s3(svy1_s3, 3, r$pcr),
+      cell_prev_s3(g3_s3,  1, r$pcr), cell_prev_s3(g3_s3,  2, r$pcr), cell_prev_s3(g3_s3,  3, r$pcr),
+      cell_prev_s3(g4_s3,  1, r$pcr), cell_prev_s3(g4_s3,  2, r$pcr), cell_prev_s3(g4_s3,  3, r$pcr)
+    ))
+  }))
+}
+
+# --- Export ---
+{
+  wb <- createWorkbook()
+  addWorksheet(wb, "S3 Table")
+
+  writeData(wb, "S3 Table",
+    "S3 Table. Prevalence of Plasmodium infection by glucose-6-phosphate (G6PD) status and study group.",
+    startRow = 1, startCol = 1)
+  mergeCells(wb, "S3 Table", cols = 1:10, rows = 1)
+  addStyle(wb, "S3 Table",
+    createStyle(fontSize = 11, fontName = "Arial", textDecoration = "bold", wrapText = TRUE),
+    rows = 1, cols = 1)
+  setRowHeights(wb, "S3 Table", rows = 1, heights = 30)
+
+  writeData(wb, "S3 Table", rows_s3, startRow = 3, startCol = 1, colNames = TRUE)
+
+  addStyle(wb, "S3 Table",
+    createStyle(fontSize = 9, fontName = "Arial", textDecoration = "bold",
+                halign = "center", border = "TopBottom", wrapText = TRUE),
+    rows = 3, cols = 1:10, gridExpand = TRUE)
+  setRowHeights(wb, "S3 Table", rows = 3, heights = 60)
+
+  addStyle(wb, "S3 Table",
+    createStyle(fontSize = 9, fontName = "Arial", wrapText = TRUE),
+    rows = 4:(nrow(rows_s3) + 3), cols = 1:10, gridExpand = TRUE)
+
+  setColWidths(wb, "S3 Table", cols = 1,    widths = 20)
+  setColWidths(wb, "S3 Table", cols = 2:10, widths = 18)
+  freezePane(wb, "S3 Table", firstRow = TRUE)
+
+  fn_row <- nrow(rows_s3) + 5
+  writeData(wb, "S3 Table",
+    "Int: Intermediate. CI: Confidence Interval. * Estimates consider sample weights.",
+    startRow = fn_row, startCol = 1)
+  addStyle(wb, "S3 Table",
+    createStyle(fontSize = 8, fontName = "Arial", fontColour = "#555555"),
+    rows = fn_row, cols = 1)
+
+  saveWorkbook(wb, "TableS3_G6PD_2026.xlsx", overwrite = TRUE)
+  message("TableS3_G6PD_2026.xlsx saved")
+}
+
+
+# ==============================================================================
+# SECTION 8 — Table 3: Prevalence ratios (PR) for associations between sex,
+#             ethnicity, malaria, and G6PD deficiency (G6PDd) by group
+# ------------------------------------------------------------------------------
+# ==============================================================================
+
+# --- Data subsets ---
+{
+  df_t3 <- df  # `df` already excludes the 8 participant IDs (Section 1) --
+               # applies here automatically, no separate filter needed.
+  df_t3$male <- ifelse(df_t3$sex == 2, 1, 0)
+
+  # Ethnicity (self-report, FI0022) -> binary Afro-Colombian / Other.
+  
+  df_t3$FI0022_i <- ifelse(is.na(df_t3$FI0022), 5, df_t3$FI0022)
+  df_t3$ethnicity_binary <- factor(df_t3$FI0022_i,
+                                    levels = c(1, 2, 3, 4, 5),
+                                    labels = c("Other", "Afro", "Other", "Other", "Other"))
+
+  df_t3$history_malaria <- ifelse(df_t3$FI0035 == 1, 1,
+                                   ifelse(df_t3$FI0035 == 2, 0, NA))
+
+   df_t3$pcr06 <- ifelse(df_t3$PCR06 == 9, NA, df_t3$PCR06)
+
+  g1_t3 <- df_t3 %>% filter(lugar == 1)
+  g3_t3 <- df_t3 %>% filter(lugar == 2)
+  g4_t3 <- df_t3 %>% filter(lugar == 2, FI0022 == 2)  # restricted to Afro-Colombians (FI0022 == 2)
+
+  n_g1_t3 <- nrow(g1_t3)
+  n_g3_t3 <- nrow(g3_t3)
+  n_g4_t3 <- nrow(g4_t3)
+
+  # Species factor — Group 1: excludes P. vivax (see header comment)
+  g1_sp <- g1_t3 %>% filter(PCR_final != 5)
+  g1_sp$species <- factor(
+    ifelse(g1_sp$PCR_final == 1, 0, ifelse(g1_sp$PCR_final == 4, 1, 2)),
+    levels = c(0, 1, 2), labels = c("Negative", "P falciparum", "Others")
+  )
+
+  # Species factor — Groups 3 and 4: keeps all categories
+  g3_t3$species <- factor(
+    ifelse(g3_t3$PCR_final == 1, 0,
+    ifelse(g3_t3$PCR_final == 4, 1,
+    ifelse(g3_t3$PCR_final == 5, 2, 3))),
+    levels = c(0, 1, 2, 3), labels = c("Negative", "P falciparum", "P vivax", "Others")
+  )
+  g4_t3$species <- factor(
+    ifelse(g4_t3$PCR_final == 1, 0,
+    ifelse(g4_t3$PCR_final == 4, 1,
+    ifelse(g4_t3$PCR_final == 5, 2, 3))),
+    levels = c(0, 1, 2, 3), labels = c("Negative", "P falciparum", "P vivax", "Others")
+  )
+}
+
+# --- Models: Group 1 (GEE, weighted, clustered) ---
+{
+  g1_eth_crude <- geelm(FI0080 ~ ethnicity_binary, data = g1_t3, id = cod_viv,
+                         family = quasipoisson, corstr = "exchangeable", weights = weight)
+  g1_eth_adj   <- geelm(FI0080 ~ ethnicity_binary + male + history_malaria + pcr06,
+                         data = g1_t3, id = cod_viv,
+                         family = quasipoisson, corstr = "exchangeable", weights = weight)
+
+  g1_sex_crude <- geelm(FI0080 ~ male, data = g1_t3, id = cod_viv,
+                         family = quasipoisson, corstr = "exchangeable", weights = weight)
+  g1_sex_adj   <- geelm(FI0080 ~ male + ethnicity_binary + pcr06 + history_malaria,
+                         data = g1_t3, id = cod_viv,
+                         family = quasipoisson, corstr = "exchangeable", weights = weight)
+
+  g1_hist_crude <- geelm(FI0080 ~ history_malaria, data = g1_t3, id = cod_viv,
+                          family = quasipoisson, corstr = "exchangeable", weights = weight)
+  g1_hist_adj   <- geelm(FI0080 ~ history_malaria + ethnicity_binary + male + pcr06,
+                          data = g1_t3, id = cod_viv,
+                          family = quasipoisson, corstr = "exchangeable", weights = weight)
+
+  g1_pcr_crude <- geelm(FI0080 ~ pcr06, data = g1_t3, id = cod_viv,
+                         family = quasipoisson, corstr = "exchangeable", weights = weight)
+  g1_pcr_adj   <- geelm(FI0080 ~ pcr06 + ethnicity_binary + male + history_malaria,
+                         data = g1_t3, id = cod_viv,
+                         family = quasipoisson, corstr = "exchangeable", weights = weight)
+
+  g1_sp_crude <- geelm(FI0080 ~ species, data = g1_sp, id = cod_viv,
+                        family = quasipoisson, corstr = "exchangeable", weights = weight)
+  g1_sp_adj   <- geelm(FI0080 ~ species + ethnicity_binary + male + history_malaria,
+                        data = g1_sp, id = cod_viv,
+                        family = quasipoisson, corstr = "exchangeable", weights = weight)
+}
+
+# --- Models: Group 3 (Outpatients, glm) ---
+
+{
+  g3_sex_crude <- glm(FI0080 ~ male, data = g3_t3, family = quasipoisson())
+  g3_sex_adj   <- glm(FI0080 ~ male + ethnicity_binary + pcr06 + history_malaria,
+                       data = g3_t3, family = quasipoisson())
+
+  g3_hist_crude <- glm(FI0080 ~ history_malaria, data = g3_t3, family = quasipoisson())
+  g3_hist_adj   <- glm(FI0080 ~ history_malaria + male + pcr06,
+                        data = g3_t3, family = quasipoisson())
+
+  g3_pcr_crude <- glm(FI0080 ~ pcr06, data = g3_t3, family = quasipoisson())
+  g3_pcr_adj   <- glm(FI0080 ~ pcr06 + male + history_malaria,
+                       data = g3_t3, family = quasipoisson())
+
+  # Species model
+  g3_sp_data <- g3_t3[g3_t3$PCR_final %in% c(1, 4, 5), ]
+  g3_sp_data$species <- factor(g3_sp_data$species,
+                                levels = c("Negative", "P falciparum", "P vivax"))
+
+  g3_sp_crude <- glm(FI0080 ~ species, data = g3_sp_data, family = quasipoisson())
+  g3_sp_adj   <- glm(FI0080 ~ species + male + history_malaria,
+                      data = g3_sp_data, family = quasipoisson())
+}
+
+# --- Models: Group 4 (restricted to Afro-Colombians, glm, no ethnicity term) ---
+{
+  g4_sex_crude <- glm(FI0080 ~ male, data = g4_t3, family = quasipoisson())
+  g4_sex_adj   <- glm(FI0080 ~ male + pcr06 + history_malaria,
+                       data = g4_t3, family = quasipoisson())
+
+  g4_hist_crude <- glm(FI0080 ~ history_malaria, data = g4_t3, family = quasipoisson())
+  g4_hist_adj   <- glm(FI0080 ~ history_malaria + male + pcr06,
+                        data = g4_t3, family = quasipoisson())
+
+  g4_pcr_crude <- glm(FI0080 ~ pcr06, data = g4_t3, family = quasipoisson())
+  g4_pcr_adj   <- glm(FI0080 ~ pcr06 + male + history_malaria,
+                       data = g4_t3, family = quasipoisson())
+
+  # Same "no Others category" fix as Group 3 -- see comment above.
+  g4_sp_data <- g4_t3[g4_t3$PCR_final %in% c(1, 4, 5), ]
+  g4_sp_data$species <- factor(g4_sp_data$species,
+                                levels = c("Negative", "P falciparum", "P vivax"))
+
+  g4_sp_crude <- glm(FI0080 ~ species, data = g4_sp_data, family = quasipoisson())
+  g4_sp_adj   <- glm(FI0080 ~ species + male + history_malaria,
+                      data = g4_sp_data, family = quasipoisson())
+}
+
+# --- Helpers: extract PR + profile-likelihood CI 95%, formatted to 2 decimals ---
+# Returns c(pr = "", ci = "") when the term is absent or not estimable, so the
+# corresponding Excel cell is left blank rather than showing "NA".
+#
+# CI method: profile likelihood via confint() (dispatches to MASS::confint.glm).
+# CONFIRMED EMPIRICALLY against your own R session: for g3_hist_crude /
+# g3_hist_adj, confint() reproduced the original .qmd values exactly
+# (0.44-1.82 and 0.46-1.99), while Wald variants did not. Profile likelihood
+# is the correct method here.
+
+extract_glm_pr <- function(model, term_pattern) {
+  est <- coef(model)
+  idx <- grep(term_pattern, names(est), ignore.case = TRUE)
+  if (length(idx) == 0 || is.na(est[idx[1]])) return(c(pr = "", ci = ""))
+  i <- idx[1]
+  term_name <- names(est)[i]
+
+  ci <- tryCatch(
+    suppressMessages(confint(model, parm = term_name)),
+    error = function(e) {
+      message("extract_glm_pr(): profile-likelihood CI failed for term '", term_name,
+              "' \u2013 returning blank CI. Error: ", conditionMessage(e))
+      NULL
+    },
+    warning = function(w) {
+      message("extract_glm_pr(): profile-likelihood CI raised a warning for term '",
+              term_name, "' \u2013 ", conditionMessage(w),
+              ". Proceeding with the profiled result; please check this term manually.")
+      suppressWarnings(suppressMessages(confint(model, parm = term_name)))
+    }
+  )
+  if (is.null(ci)) return(c(pr = sprintf("%.2f", exp(est[i])), ci = ""))
+
+  # confint(model, parm=<one term>) returns a plain 2-element vector (not a
+  # matrix), unlike confint(model) on the whole model -- index accordingly.
+  c(pr = sprintf("%.2f", exp(est[i])),
+    ci = sprintf("%.2f \u2013 %.2f", exp(ci[1]), exp(ci[2])))
+}
+
+# See CAVEAT in the section header comment above.
+extract_gee_pr <- function(model, term_pattern) {
+  s <- summary(model)
+  coefs <- if (!is.null(s$coefficients)) s$coefficients else s$coef
+  if (is.null(coefs)) {
+    warning("extract_gee_pr(): no $coefficients found in summary(model).")
+    return(c(pr = "", ci = ""))
+  }
+  idx <- grep(term_pattern, rownames(coefs), ignore.case = TRUE)
+  if (length(idx) == 0) return(c(pr = "", ci = ""))
+  se_col <- grep("robust|std|se", colnames(coefs), ignore.case = TRUE)[1]
+  if (is.na(se_col)) {
+    warning("extract_gee_pr(): no standard-error column found in summary(model)$coefficients. ",
+            "Columns available: ", paste(colnames(coefs), collapse = ", "))
+    return(c(pr = "", ci = ""))
+  }
+  i <- idx[1]
+  est <- coefs[i, 1]
+  se  <- coefs[i, se_col]
+  if (is.na(est) || is.na(se)) return(c(pr = "", ci = ""))
+  c(pr = sprintf("%.2f", exp(est)),
+    ci = sprintf("%.2f \u2013 %.2f", exp(est - 1.96 * se), exp(est + 1.96 * se)))
+}
+
+empty_pr_ci <- c(pr = "", ci = "")
+
+# --- Column names (computed once, reused per row — same idiom as Table 1/2) ---
+{
+  col_g1_crude_pr <- paste0("General population (Group 1, n=", n_g1_t3, ") \u2014 Crude PR")
+  col_g1_crude_ci <- paste0("General population (Group 1, n=", n_g1_t3, ") \u2014 Crude CI 95%")
+  col_g1_adj_pr   <- paste0("General population (Group 1, n=", n_g1_t3, ") \u2014 Adjusted* aPR")
+  col_g1_adj_ci   <- paste0("General population (Group 1, n=", n_g1_t3, ") \u2014 Adjusted* CI 95%")
+
+  col_g3_crude_pr <- paste0("Outpatients (Group 3, n=", n_g3_t3, ") \u2014 Crude PR")
+  col_g3_crude_ci <- paste0("Outpatients (Group 3, n=", n_g3_t3, ") \u2014 Crude CI 95%")
+  col_g3_adj_pr   <- paste0("Outpatients (Group 3, n=", n_g3_t3, ") \u2014 Adjusted* aPR")
+  col_g3_adj_ci   <- paste0("Outpatients (Group 3, n=", n_g3_t3, ") \u2014 Adjusted* CI 95%")
+
+  col_g4_crude_pr <- paste0("...restricted to Afro-Colombians (n=", n_g4_t3, ") \u2014 Crude PR")
+  col_g4_crude_ci <- paste0("...restricted to Afro-Colombians (n=", n_g4_t3, ") \u2014 Crude CI 95%")
+  col_g4_adj_pr   <- paste0("...restricted to Afro-Colombians (n=", n_g4_t3, ") \u2014 Adjusted* aPR")
+  col_g4_adj_ci   <- paste0("...restricted to Afro-Colombians (n=", n_g4_t3, ") \u2014 Adjusted* CI 95%")
+}
+
+make_row_t3 <- function(label, g1c, g1a, g3c, g3a, g4c, g4a) {
+  tibble(
+    Variable = label,
+    !!col_g1_crude_pr := unname(g1c["pr"]), !!col_g1_crude_ci := unname(g1c["ci"]),
+    !!col_g1_adj_pr   := unname(g1a["pr"]), !!col_g1_adj_ci   := unname(g1a["ci"]),
+    !!col_g3_crude_pr := unname(g3c["pr"]), !!col_g3_crude_ci := unname(g3c["ci"]),
+    !!col_g3_adj_pr   := unname(g3a["pr"]), !!col_g3_adj_ci   := unname(g3a["ci"]),
+    !!col_g4_crude_pr := unname(g4c["pr"]), !!col_g4_crude_ci := unname(g4c["ci"]),
+    !!col_g4_adj_pr   := unname(g4a["pr"]), !!col_g4_adj_ci   := unname(g4a["ci"])
+  )
+}
+
+# --- Build rows ---
+{
+  rows_t3 <- bind_rows(
+
+    make_row_t3("Afro-Colombian",
+      extract_gee_pr(g1_eth_crude, "ethnicity_binary"), extract_gee_pr(g1_eth_adj, "ethnicity_binary"),
+      empty_pr_ci, empty_pr_ci,
+      empty_pr_ci, empty_pr_ci),
+
+    make_row_t3("Male",
+      extract_gee_pr(g1_sex_crude, "^male$"), extract_gee_pr(g1_sex_adj, "^male$"),
+      extract_glm_pr(g3_sex_crude, "^male$"), extract_glm_pr(g3_sex_adj, "^male$"),
+      extract_glm_pr(g4_sex_crude, "^male$"), extract_glm_pr(g4_sex_adj, "^male$")),
+
+    make_row_t3("Prior reported history of malaria",
+      extract_gee_pr(g1_hist_crude, "history_malaria"), extract_gee_pr(g1_hist_adj, "history_malaria"),
+      extract_glm_pr(g3_hist_crude, "history_malaria"), extract_glm_pr(g3_hist_adj, "history_malaria"),
+      extract_glm_pr(g4_hist_crude, "history_malaria"), extract_glm_pr(g4_hist_adj, "history_malaria")),
+
+    make_row_t3("Current Plasmodium infection, any species",
+      extract_gee_pr(g1_pcr_crude, "pcr06"), extract_gee_pr(g1_pcr_adj, "pcr06"),
+      extract_glm_pr(g3_pcr_crude, "pcr06"), extract_glm_pr(g3_pcr_adj, "pcr06"),
+      extract_glm_pr(g4_pcr_crude, "pcr06"), extract_glm_pr(g4_pcr_adj, "pcr06")),
+
+    make_row_t3("   P. falciparum",
+      extract_gee_pr(g1_sp_crude, "falciparum"), extract_gee_pr(g1_sp_adj, "falciparum"),
+      extract_glm_pr(g3_sp_crude, "falciparum"), extract_glm_pr(g3_sp_adj, "falciparum"),
+      extract_glm_pr(g4_sp_crude, "falciparum"), extract_glm_pr(g4_sp_adj, "falciparum")),
+
+    make_row_t3("   P. vivax",
+      empty_pr_ci, empty_pr_ci,  # excluded for Group 1 — see section header comment
+      extract_glm_pr(g3_sp_crude, "vivax"), extract_glm_pr(g3_sp_adj, "vivax"),
+      extract_glm_pr(g4_sp_crude, "vivax"), extract_glm_pr(g4_sp_adj, "vivax")),
+
+    make_row_t3("   Others",
+      extract_gee_pr(g1_sp_crude, "Others"), extract_gee_pr(g1_sp_adj, "Others"),
+      extract_glm_pr(g3_sp_crude, "Others"), extract_glm_pr(g3_sp_adj, "Others"),
+      extract_glm_pr(g4_sp_crude, "Others"), extract_glm_pr(g4_sp_adj, "Others"))
+  )
+}
+
+# --- Export ---
+{
+  wb <- createWorkbook()
+  addWorksheet(wb, "Table 3")
+
+  writeData(wb, "Table 3",
+    "Table 3. Prevalence ratios (PRs) for associations between sex, ethnicity, malaria, and G6PD deficiency (G6PDd) by group.",
+    startRow = 1, startCol = 1)
+  mergeCells(wb, "Table 3", cols = 1:13, rows = 1)
+  addStyle(wb, "Table 3",
+    createStyle(fontSize = 11, fontName = "Arial", textDecoration = "bold", wrapText = TRUE),
+    rows = 1, cols = 1)
+  setRowHeights(wb, "Table 3", rows = 1, heights = 30)
+
+  writeData(wb, "Table 3", rows_t3, startRow = 3, startCol = 1, colNames = TRUE)
+
+  addStyle(wb, "Table 3",
+    createStyle(fontSize = 9, fontName = "Arial", textDecoration = "bold",
+                halign = "center", border = "TopBottom", wrapText = TRUE),
+    rows = 3, cols = 1:13, gridExpand = TRUE)
+  setRowHeights(wb, "Table 3", rows = 3, heights = 60)
+
+  addStyle(wb, "Table 3",
+    createStyle(fontSize = 9, fontName = "Arial", wrapText = TRUE),
+    rows = 4:(nrow(rows_t3) + 3), cols = 1:13, gridExpand = TRUE)
+
+  setColWidths(wb, "Table 3", cols = 1,     widths = 45)
+  setColWidths(wb, "Table 3", cols = 2:13,  widths = 16)
+  freezePane(wb, "Table 3", firstRow = TRUE)
+
+  fn_row <- nrow(rows_t3) + 5
+  writeData(wb, "Table 3", paste0(
+    "Prevalence ratios (PR) for associations between sex, ethnicity, malaria, and G6PD deficiency (G6PDd). ",
+    "Results shown by group, with indigenous population not included due to lack of G6PDd.\n",
+    "*Adjusted by ethnic group, sex and prior history of malaria."
+  ), startRow = fn_row, startCol = 1)
+  addStyle(wb, "Table 3",
+    createStyle(fontSize = 8, fontName = "Arial", fontColour = "#555555", wrapText = TRUE),
+    rows = fn_row, cols = 1)
+  setRowHeights(wb, "Table 3", rows = fn_row, heights = 40)
+
+  saveWorkbook(wb, "Table3_G6PD_2026.xlsx", overwrite = TRUE)
+  message("Table3_G6PD_2026.xlsx saved")
+}
+
+
+# ==============================================================================
+# SECTION 9 — S4 Table: Associations between sex, ethnicity, malaria, and the
+#             level of G6PD enzymatic activity (UI/g Hb), study population
+# ------------------------------------------------------------------------------
+# ==============================================================================
+
+# --- Data subsets ---
+{
+  s4_g1 <- g1_t3
+  s4_g1$logg6pd <- log(s4_g1$FI5356)
+
+  s4_g3 <- g3_t3
+  s4_g3$logg6pd <- log(s4_g3$FI5356)
+
+  s4_g4 <- g4_t3
+  s4_g4$logg6pd <- log(s4_g4$FI5356)
+
+  n_s4_g1 <- nrow(s4_g1)
+  n_s4_g3 <- nrow(s4_g3)
+  n_s4_g4 <- nrow(s4_g4)
+
+  # Species factor for Group 1 in S4 — includes P. vivax (see header note)
+  s4_g1_sp <- s4_g1
+  s4_g1_sp$species <- factor(
+    ifelse(s4_g1_sp$PCR_final == 1, 0,
+    ifelse(s4_g1_sp$PCR_final == 4, 1,
+    ifelse(s4_g1_sp$PCR_final == 5, 2, 3))),
+    levels = c(0, 1, 2, 3), labels = c("Negative", "P falciparum", "P vivax", "Others")
+  )
+  
+}
+
+# --- Models: Group 1 (GEE) ---
+{
+  s4_g1_base <- geelm(logg6pd ~ ethnicity_binary + male + history_malaria + pcr06,
+                       data = s4_g1, id = cod_viv,
+                       family = gaussian(), corstr = "exchangeable", weights = weight)
+  s4_g1_sp_m <- geelm(logg6pd ~ ethnicity_binary + male + history_malaria + species,
+                       data = s4_g1_sp, id = cod_viv,
+                       family = gaussian(), corstr = "exchangeable", weights = weight)
+}
+
+# --- Models: Group 3 (Outpatients, glm) ---
+
+{
+  s4_g3_base <- glm(logg6pd ~ ethnicity_binary + male + history_malaria + pcr06,
+                     data = s4_g3, family = gaussian())
+  s4_g3_sp_m <- glm(logg6pd ~ male + history_malaria + species,
+                     data = s4_g3, family = gaussian())
+}
+
+# --- Models: Group 4 (restricted to Afro-Colombians, glm, no ethnicity term) ---
+{
+  s4_g4_base <- glm(logg6pd ~ male + history_malaria + pcr06,
+                     data = s4_g4, family = gaussian())
+  s4_g4_sp_m <- glm(logg6pd ~ male + history_malaria + species,
+                     data = s4_g4, family = gaussian())
+}
+
+# --- Column names ---
+{
+  col_s4_g1 <- paste0("General population (Group 1, n=", n_s4_g1, ") \u2014 exp(\u03b2) adjusted")
+  col_s4_g1_ci <- paste0("General population (Group 1, n=", n_s4_g1, ") \u2014 CI 95%")
+
+  col_s4_g3 <- paste0("Outpatients (Group 3, n=", n_s4_g3, ") \u2014 exp(\u03b2) adjusted")
+  col_s4_g3_ci <- paste0("Outpatients (Group 3, n=", n_s4_g3, ") \u2014 CI 95%")
+
+  col_s4_g4 <- paste0("...restricted to Afro-Colombians (n=", n_s4_g4, ") \u2014 exp(\u03b2) adjusted")
+  col_s4_g4_ci <- paste0("...restricted to Afro-Colombians (n=", n_s4_g4, ") \u2014 CI 95%")
+}
+
+make_row_s4 <- function(label, g1, g3, g4) {
+  tibble(
+    Variable = label,
+    !!col_s4_g1    := unname(g1["pr"]), !!col_s4_g1_ci := unname(g1["ci"]),
+    !!col_s4_g3    := unname(g3["pr"]), !!col_s4_g3_ci := unname(g3["ci"]),
+    !!col_s4_g4    := unname(g4["pr"]), !!col_s4_g4_ci := unname(g4["ci"])
+  )
+}
+
+# --- Build rows ---
+{
+  rows_s4 <- bind_rows(
+
+    make_row_s4("Afro-Colombian",
+      extract_gee_pr(s4_g1_base, "ethnicity_binary"),
+      extract_glm_pr(s4_g3_base, "ethnicity_binary"),
+      empty_pr_ci),
+
+    make_row_s4("Male",
+      extract_gee_pr(s4_g1_base, "^male$"),
+      extract_glm_pr(s4_g3_base, "^male$"),
+      extract_glm_pr(s4_g4_base, "^male$")),
+
+    make_row_s4("Prior reported history of malaria",
+      extract_gee_pr(s4_g1_base, "history_malaria"),
+      extract_glm_pr(s4_g3_base, "history_malaria"),
+      extract_glm_pr(s4_g4_base, "history_malaria")),
+
+    make_row_s4("Current Plasmodium infection, any species",
+      extract_gee_pr(s4_g1_base, "pcr06"),
+      extract_glm_pr(s4_g3_base, "pcr06"),
+      extract_glm_pr(s4_g4_base, "pcr06")),
+
+    make_row_s4("   P. falciparum",
+      extract_gee_pr(s4_g1_sp_m, "falciparum"),
+      extract_glm_pr(s4_g3_sp_m, "falciparum"),
+      extract_glm_pr(s4_g4_sp_m, "falciparum")),
+
+    make_row_s4("   P. vivax",
+      extract_gee_pr(s4_g1_sp_m, "vivax"),
+      extract_glm_pr(s4_g3_sp_m, "vivax"),
+      extract_glm_pr(s4_g4_sp_m, "vivax")),
+
+    make_row_s4("   Others",
+      extract_gee_pr(s4_g1_sp_m, "Others"),
+      extract_glm_pr(s4_g3_sp_m, "Others"),
+      extract_glm_pr(s4_g4_sp_m, "Others"))
+  )
+}
+
+# --- Export ---
+{
+  wb <- createWorkbook()
+  addWorksheet(wb, "S4 Table")
+
+  writeData(wb, "S4 Table",
+    "S4 Table. Associations between sex, ethnicity, malaria, and the level of G6PD enzymatic activity (IIU/g Hb), study population.",
+    startRow = 1, startCol = 1)
+  mergeCells(wb, "S4 Table", cols = 1:7, rows = 1)
+  addStyle(wb, "S4 Table",
+    createStyle(fontSize = 11, fontName = "Arial", textDecoration = "bold", wrapText = TRUE),
+    rows = 1, cols = 1)
+  setRowHeights(wb, "S4 Table", rows = 1, heights = 30)
+
+  writeData(wb, "S4 Table", rows_s4, startRow = 3, startCol = 1, colNames = TRUE)
+
+  addStyle(wb, "S4 Table",
+    createStyle(fontSize = 9, fontName = "Arial", textDecoration = "bold",
+                halign = "center", border = "TopBottom", wrapText = TRUE),
+    rows = 3, cols = 1:7, gridExpand = TRUE)
+  setRowHeights(wb, "S4 Table", rows = 3, heights = 60)
+
+  addStyle(wb, "S4 Table",
+    createStyle(fontSize = 9, fontName = "Arial", wrapText = TRUE),
+    rows = 4:(nrow(rows_s4) + 3), cols = 1:7, gridExpand = TRUE)
+
+  setColWidths(wb, "S4 Table", cols = 1,    widths = 45)
+  setColWidths(wb, "S4 Table", cols = 2:7,  widths = 18)
+  freezePane(wb, "S4 Table", firstRow = TRUE)
+
+  fn_row <- nrow(rows_s4) + 5
+  writeData(wb, "S4 Table",
+    "*Adjusted by ethnic group, sex and prior history of malaria.",
+    startRow = fn_row, startCol = 1)
+  addStyle(wb, "S4 Table",
+    createStyle(fontSize = 8, fontName = "Arial", fontColour = "#555555"),
+    rows = fn_row, cols = 1)
+
+  saveWorkbook(wb, "TableS4_G6PD_2026.xlsx", overwrite = TRUE)
+  message("TableS4_G6PD_2026.xlsx saved")
+}
+# ==============================================================================
+# END OF SCRIPT
+# ==============================================================================
+
