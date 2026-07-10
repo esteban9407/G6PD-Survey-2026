@@ -1,0 +1,762 @@
+# ==============================================================================
+# SCRIPT   : pipeline_Fig_G6PDSurvey.R
+# PROJECT  : G6PD Survey — Quibdó, Chocó, Colombia
+# AUTHORS  : Juan Esteban Martínez López — Grupo Malaria, Universidad de Antioquia
+#            Daniel Camilo Aguirre Acevedo — Instituto de Investigaciones Médicas, Universidad de Antioquia
+# CONTACT  : jesteban.martinez@udea.edu.co
+# CREATED  : 2025
+# UPDATED  : 2026
+# ------------------------------------------------------------------------------
+# PURPOSE  : Generate publication-ready figures (Fig 1, Fig 3, Fig 4, Fig S2,
+#            Fig S_BA) from the bd_G6PDSurvey_2026 dataset.
+#            All figures comply with PLOS Global Public Health submission
+#            requirements (TIFF, LZW, 300 dpi, Arial 8–12 pt).
+# ------------------------------------------------------------------------------
+# INPUT    : bd_G6PDSurvey_2026 — object already loaded in the R environment,
+#            RAW (participant exclusions are NOT pre-applied). This script
+#            applies the 8-ID exclusion itself (Section 1), the same one
+#            used in pipeline_tables_2.R -- with ONE exception: Fig S_BA
+#            (Bland-Altman, Section 7) intentionally uses the FULL,
+#            non-excluded dataset. See Section 1 for the reason.
+# OUTPUT   : Fig1.tif | Fig3.tif | Fig4A.tif | Fig4B.tif | Fig4.tif | FigS2.tif |
+#            FigS_BA.tif
+# ==============================================================================
+
+
+# ==============================================================================
+# SECTION 0 — Libraries
+# ==============================================================================
+library(haven)
+library(survey)
+library(jtools)
+library(remotes)
+library(svrepmisc)
+library(readr)
+library(dplyr)
+library(epiR)
+library(ggplot2)
+library(tidyverse)
+library(finalfit)
+library(visdat)
+library(naniar)
+library(vcd)
+library(stringr)
+library(patchwork)
+library(cowplot)
+
+set.seed(0934)
+options(scipen = 999)
+
+
+# ==============================================================================
+# SECTION 1 — Data preparation
+# ------------------------------------------------------------------------------
+# Source  : bd_G6PDSurvey_2026 (raw, as loaded -- NOT pre-excluded)
+# Action  : Replace sentinel missing values (-999, -9999, 999) with NA, then
+#           apply the 8-ID participant exclusion used throughout the rest of
+#           this analysis (same exclusion as pipeline_tables_2.R Section 1).
+#
+#           TWO working copies are used:
+#             - `df`      : sentinel-NA replaced + 8-ID exclusion applied.
+#                           Used by Fig 1, Fig 4, Fig 3 (Section 5), Fig S2.
+#             - `df_full` : sentinel-NA replaced ONLY, NO exclusion applied.
+#                           Used ONLY by Fig S_BA (Bland-Altman, Section 7).
+# ==============================================================================
+
+# DATA DICTIONARY — variables used across all figures
+# ------------------------------------------------------------------------------
+# id_compuesto : Participant unique ID
+# lugar        : Recruitment site  | 1 = Urban neighborhood/district of Quibdó
+#                                  | 2 = Malaria diagnostic post
+#                                  | 3 = Indigenous community
+# sex          : Biological sex    | 1 = Female  | 2 = Male
+# etnia        : Ethnicity         | 1 = Afro-Colombian | 2 = Indigenous | 3 = Other
+# FI5356       : Final G6PD enzyme activity (UI/gHb) — continuous
+# FI5457       : G6PD interpretation | 1 = Normal | 2 = Intermediate | 3 = Deficient
+# FI0053       : G6PD enzyme activity — first measurement (UI/gHb)
+# FI0055       : Hemoglobin — first measurement (g/dL)
+# FI5558       : Hemoglobin — final value (g/dL)
+# PCR06r       : Malaria result (binary) | 0 = Negative | 1 = Positive
+# PCR_final    : Final molecular diagnosis
+#                  1 = Negative for genus | 2 = Species not identified
+#                  3 = Mixed infection    | 4 = P. falciparum | 5 = P. vivax
+# ------------------------------------------------------------------------------
+
+{
+  df <- bd_G6PDSurvey_2026
+
+  # Replace all sentinel missing values with NA
+  df[df == -999 | df == -9999 | df == 999] <- NA
+
+  # `df_full`: same sentinel-NA cleanup, but WITHOUT the 8-ID exclusion below.
+  # Used only by Fig S_BA (Bland-Altman, Section 7) -- see note above.
+  df_full <- df
+
+  # Participant exclusion -- applies to `df` (all figures except Bland-Altman).
+  # Same 8 IDs excluded in pipeline_tables_2.R Section 1.
+  exclude_ids <- c("10112701", "800127", "800032", "50214001",
+                   "9051803", "10333502", "50104501", "700219")
+  df$id_compuesto_chr <- trimws(as.character(df$id_compuesto))
+  df <- df[!df$id_compuesto_chr %in% exclude_ids, ]
+}
+
+
+# ==============================================================================
+# SECTION 2 — Shared visual elements (used across Fig 1, Fig S2)
+# ==============================================================================
+
+# Helper: builds the legend label vector for a given subset.
+# Returns a named character vector: names = sex codes, values = "Female (n = X)"
+build_legend <- function(data, lugar_code = NULL, etnia_code = NULL) {
+  d <- data
+  if (!is.null(lugar_code)) d <- dplyr::filter(d, lugar == lugar_code)
+  if (!is.null(etnia_code)) d <- dplyr::filter(d, etnia == etnia_code)
+
+  totales <- d %>%
+    dplyr::filter(!is.na(FI5356)) %>%
+    dplyr::count(sex) %>%
+    dplyr::mutate(label = dplyr::case_when(
+      sex == 1 ~ paste0("Female (n = ", n, ")"),
+      sex == 2 ~ paste0("Male (n = ", n, ")")
+    ))
+
+  lbl <- totales$label
+  names(lbl) <- as.character(totales$sex)
+  lbl
+}
+
+# Shared theme — PLOS font size requirements: 8–12 pt
+theme_plos <- theme_classic() +
+  theme(
+    legend.position      = c(0.8, 0.9),
+    legend.direction     = "vertical",
+    legend.justification = "center",
+    legend.background    = element_rect(fill = "transparent"),
+    legend.key.size      = unit(1.2, "lines"),
+    legend.text          = element_text(size = 9),
+    axis.text.x          = element_text(size = 8),
+    axis.text.y          = element_text(size = 8),
+    axis.title.y         = element_text(size = 9),
+    axis.title.x         = element_text(size = 9)
+  )
+
+# Color palette — Female = red (#BA0C2F), Male = blue (#0067B9)
+# Keyed to character "1" / "2" (factor levels of sex)
+pal_fill  <- c("1" = "#BA0C2F", "2" = "#0067B9")
+pal_color <- c("1" = "#BA0C2F", "2" = "#0067B9")
+
+
+# ==============================================================================
+# SECTION 3 — Figure 1: G6PD enzyme activity density plots by sex and site
+# ------------------------------------------------------------------------------
+# Four panels stacked vertically (A–D), exported as a single TIFF.
+# Panel A: Urban neighborhood / district of Quibdó  (lugar == 1)
+# Panel B: Indigenous community                     (lugar == 3)
+# Panel C: Malaria diagnostic post — all ethnicities (lugar == 2)
+# Panel D: Malaria diagnostic post — Afro-Colombian only (lugar == 2, etnia == 1)
+# ==============================================================================
+
+# --- Panel A ---
+{
+  lbl_A <- build_legend(df, lugar_code = 1)
+
+  med_A <- df %>%
+    dplyr::filter(lugar == 1, !is.na(FI5356)) %>%
+    dplyr::group_by(sex) %>%
+    dplyr::summarise(med = median(FI5356, na.rm = TRUE), .groups = "drop")
+
+  med_A_f <- med_A$med[med_A$sex == 1]
+  med_A_m <- med_A$med[med_A$sex == 2]
+
+  grap1 <- df %>%
+    dplyr::filter(lugar == 1, !is.na(FI5356)) %>%
+    ggplot(aes(x = FI5356, fill = factor(sex), color = factor(sex))) +
+    geom_density(alpha = 0.3, linewidth = 0.8) +
+    scale_fill_manual(values = pal_fill, labels = lbl_A) +
+    scale_color_manual(values = pal_color) +
+    geom_vline(xintercept = med_A_m, color = "#0067B9", linetype = "dashed", linewidth = 0.8) +
+    geom_vline(xintercept = med_A_f, color = "#BA0C2F", linetype = "dashed", linewidth = 0.8) +
+    annotate("text", x = med_A_m, y = 0.03,
+             label = paste0("Median = ", med_A_m),
+             vjust = 1, hjust = 1.1, color = "#0067B9", size = 3) +
+    annotate("text", x = med_A_f, y = 0.03,
+             label = paste0("Median = ", med_A_f),
+             vjust = 1, hjust = -0.2, color = "#BA0C2F", size = 3) +
+    labs(x = "G6PD enzyme activity (UI/gHb)", y = "Frequency") +
+    guides(fill = guide_legend(title = NULL), color = "none") +
+    scale_x_continuous(breaks = seq(0, 20, 1), limits = c(0, 20)) +
+    scale_y_continuous(breaks = seq(0, 0.30, 0.05)) +
+    theme_plos
+}
+
+# --- Panel B ---
+{
+  lbl_B <- build_legend(df, lugar_code = 3)
+
+  med_B <- df %>%
+    dplyr::filter(lugar == 3, !is.na(FI5356)) %>%
+    dplyr::group_by(sex) %>%
+    dplyr::summarise(med = median(FI5356, na.rm = TRUE), .groups = "drop")
+
+  med_B_f <- med_B$med[med_B$sex == 1]
+  med_B_m <- med_B$med[med_B$sex == 2]
+
+  grap2 <- df %>%
+    dplyr::filter(lugar == 3, !is.na(FI5356)) %>%
+    ggplot(aes(x = FI5356, fill = factor(sex), color = factor(sex))) +
+    geom_density(alpha = 0.3, linewidth = 0.8) +
+    scale_fill_manual(values = pal_fill, labels = lbl_B) +
+    scale_color_manual(values = pal_color) +
+    geom_vline(xintercept = med_B_m, color = "#0067B9", linetype = "dashed", linewidth = 0.8) +
+    geom_vline(xintercept = med_B_f, color = "#BA0C2F", linetype = "dashed", linewidth = 0.8) +
+    annotate("text", x = med_B_m, y = 0.03,
+             label = paste0("Median = ", med_B_m),
+             vjust = 1, hjust = 1.1, color = "#0067B9", size = 3) +
+    annotate("text", x = med_B_f, y = 0.03,
+             label = paste0("Median = ", med_B_f),
+             vjust = 1, hjust = -0.2, color = "#BA0C2F", size = 3) +
+    labs(x = "G6PD enzyme activity (UI/gHb)", y = "Frequency") +
+    guides(fill = guide_legend(title = NULL), color = "none") +
+    scale_x_continuous(breaks = seq(0, 20, 1), limits = c(0, 20)) +
+    scale_y_continuous(breaks = seq(0, 0.30, 0.05)) +
+    theme_plos
+}
+
+# --- Panel C ---
+{
+  lbl_C <- build_legend(df, lugar_code = 2)
+
+  med_C <- df %>%
+    dplyr::filter(lugar == 2, !is.na(FI5356)) %>%
+    dplyr::group_by(sex) %>%
+    dplyr::summarise(med = median(FI5356, na.rm = TRUE), .groups = "drop")
+
+  med_C_f <- med_C$med[med_C$sex == 1]
+  med_C_m <- med_C$med[med_C$sex == 2]
+
+  grap3 <- df %>%
+    dplyr::filter(lugar == 2, !is.na(FI5356)) %>%
+    ggplot(aes(x = FI5356, fill = factor(sex), color = factor(sex))) +
+    geom_density(alpha = 0.3, linewidth = 0.8) +
+    scale_fill_manual(values = pal_fill, labels = lbl_C) +
+    scale_color_manual(values = pal_color) +
+    geom_vline(xintercept = med_C_m, color = "#0067B9", linetype = "dashed", linewidth = 0.8) +
+    geom_vline(xintercept = med_C_f, color = "#BA0C2F", linetype = "dashed", linewidth = 0.8) +
+    annotate("text", x = med_C_m, y = 0.03,
+             label = paste0("Median = ", med_C_m),
+             vjust = 1, hjust = 1.1, color = "#0067B9", size = 3) +
+    annotate("text", x = med_C_f, y = 0.03,
+             label = paste0("Median = ", med_C_f),
+             vjust = 1, hjust = -0.2, color = "#BA0C2F", size = 3) +
+    labs(x = "G6PD enzyme activity (UI/gHb)", y = "Frequency") +
+    guides(fill = guide_legend(title = NULL), color = "none") +
+    scale_x_continuous(breaks = seq(0, 20, 1), limits = c(0, 20)) +
+    scale_y_continuous(breaks = seq(0, 0.30, 0.05)) +
+    theme_plos
+}
+
+# --- Panel D — Afro-Colombian subset from diagnostic post ---
+{
+  lbl_D <- build_legend(df, lugar_code = 2, etnia_code = 1)
+
+  med_D <- df %>%
+    dplyr::filter(lugar == 2, etnia == 1, !is.na(FI5356)) %>%
+    dplyr::group_by(sex) %>%
+    dplyr::summarise(med = median(FI5356, na.rm = TRUE), .groups = "drop")
+
+  med_D_f <- med_D$med[med_D$sex == 1]
+  med_D_m <- med_D$med[med_D$sex == 2]
+
+  grap4 <- df %>%
+    dplyr::filter(lugar == 2, etnia == 1, !is.na(FI5356)) %>%
+    ggplot(aes(x = FI5356, fill = factor(sex), color = factor(sex))) +
+    geom_density(alpha = 0.3, linewidth = 0.8) +
+    scale_fill_manual(values = pal_fill, labels = lbl_D) +
+    scale_color_manual(values = pal_color) +
+    geom_vline(xintercept = med_D_m, color = "#0067B9", linetype = "dashed", linewidth = 0.8) +
+    geom_vline(xintercept = med_D_f, color = "#BA0C2F", linetype = "dashed", linewidth = 0.8) +
+    annotate("text", x = med_D_m, y = 0.03,
+             label = paste0("Median = ", med_D_m),
+             vjust = 1, hjust = 1.1, color = "#0067B9", size = 3) +
+    annotate("text", x = med_D_f, y = 0.03,
+             label = paste0("Median = ", med_D_f),
+             vjust = 1, hjust = -0.2, color = "#BA0C2F", size = 3) +
+    labs(x = "G6PD enzyme activity (UI/gHb)", y = "Frequency") +
+    guides(fill = guide_legend(title = NULL), color = "none") +
+    scale_x_continuous(breaks = seq(0, 20, 1), limits = c(0, 20)) +
+    scale_y_continuous(breaks = seq(0, 0.30, 0.05)) +
+    theme_plos
+}
+
+# --- Export Fig 1 ---
+# Format : TIFF, LZW, 300 dpi
+# Width  : 17.4 cm (two-column) | Height: 22.0 cm
+# X-axis suppressed on panels A–C (shown only on panel D)
+{
+  strip_x <- theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+  composicion_fig1 <- plot_grid(
+    grap1 + strip_x,
+    grap2 + strip_x,
+    grap3 + strip_x,
+    grap4,
+    ncol        = 1,
+    labels      = c("A", "B", "C", "D"),
+    align       = "v",
+    rel_heights = c(1, 1, 1, 1)
+  )
+
+  ggsave(
+    filename    = "Fig1.tif",
+    plot        = composicion_fig1,
+    width       = 17.4,
+    height      = 22.0,
+    units       = "cm",
+    dpi         = 300,
+    compression = "lzw",
+    device      = "tiff"
+  )
+
+  message("Fig1.tif exported — 17.4 x 22.0 cm, 300 dpi, LZW compression")
+}
+
+
+# ==============================================================================
+# SECTION 4 — Figure 4: G6PD enzyme activity by malaria status and site
+# ------------------------------------------------------------------------------
+# Builds a four-group dataset combining all three recruitment sites plus an
+# Afro-Colombian-only subset from the diagnostic post.
+# Panel A (grap6)  : boxplot + jitter by binary malaria result (PCR06r)
+# Panel B (grap10) : boxplot + jitter by final molecular diagnosis (PCR_final)
+# ==============================================================================
+
+{
+  # All three recruitment sites (lugar: 1, 2, 3)
+  ar <- df %>%
+    select(id_compuesto, lugar, PCR06r, FI5356, FI5457, PCR_final) %>%
+    filter(!is.na(PCR06r), !is.na(FI5356))
+
+  # Afro-Colombian subset from the diagnostic post (lugar == 2, etnia == 1)
+  # Assigned a temporary numeric code 4 to distinguish from the full Outpatients group
+  acd <- df %>%
+    select(id_compuesto, etnia, PCR06r, FI5356, FI5457, lugar, PCR_final) %>%
+    filter(!is.na(PCR06r), !is.na(FI5356), lugar == 2, etnia == 1) %>%
+    select(-lugar) %>%
+    rename(lugar = etnia) %>%
+    mutate(lugar = 4)
+
+  # Stack and assign English labels via numeric factor levels
+  df_fig4 <- rbind(ar, acd) %>%
+    mutate(
+      lugar  = factor(lugar,
+                      levels = c(1, 3, 2, 4),
+                      labels = c("General population",
+                                 "Indigenous",
+                                 "Outpatients",
+                                 "Outpatients restricted to Afro-Colombians")),
+      PCR06r = factor(PCR06r,
+                      levels = c(0, 1),
+                      labels = c("Malaria negative", "Malaria positive"))
+    )
+
+  # Subset for panel B: keep only PCR_final 1 (negative), 4 (P. falciparum), 5 (P. vivax)
+  # Excludes mixed infections (3) and unidentified species (2)
+  df_fig4b <- df_fig4 %>%
+    filter(PCR_final %in% c(1, 4, 5)) %>%
+    mutate(PCR_final = factor(PCR_final,
+                              levels = c(1, 5, 4),
+                              labels = c("No malaria", "P. vivax only", "P. falciparum only")))
+}
+
+# --- Panel A: binary malaria status ---
+{
+  grap6 <- ggplot(df_fig4, aes(x = str_wrap(lugar, width = 15), y = FI5356)) +
+    geom_boxplot(
+      aes(color = PCR06r),
+      fill          = NA,
+      position      = position_dodge(width = 0.8),
+      outlier.shape = NA
+    ) +
+    geom_jitter(
+      aes(color = PCR06r),
+      position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8),
+      size = 1.5, alpha = 0.3
+    ) +
+    scale_color_manual(
+      values = c("Malaria positive" = "#BA0C2F",
+                 "Malaria negative" = "darkgray"),
+      name = NULL
+    ) +
+    scale_y_continuous(breaks = seq(0, 20, by = 1), limits = c(0, 20)) +
+    labs(y = "G6PD enzyme activity (UI/gHb)", x = NULL) +
+    theme_classic() +
+    theme(
+      legend.position      = c(0.8, 0.9),
+      legend.direction     = "vertical",
+      legend.justification = "center",
+      legend.background    = element_rect(fill = "transparent"),
+      legend.key.size      = unit(1.2, "lines"),
+      axis.text.x          = element_text(size = 9),
+      axis.text.y          = element_text(size = 8),
+      axis.title.y         = element_text(size = 9),
+      legend.text          = element_text(size = 9)
+    )
+
+  ggsave("Fig4A.tif", grap6,
+         width = 17.4, height = 10.0, units = "cm",
+         dpi = 300, compression = "lzw", device = "tiff")
+
+  message("Fig4A.tif exported — 17.4 x 10.0 cm, 300 dpi, LZW compression")
+}
+
+# --- Panel B: final molecular diagnosis ---
+{
+  grap10 <- ggplot(df_fig4b, aes(x = str_wrap(lugar, width = 15), y = FI5356)) +
+    geom_boxplot(
+      aes(color = PCR_final),
+      fill          = NA,
+      position      = position_dodge(width = 0.8),
+      outlier.shape = NA
+    ) +
+    geom_jitter(
+      aes(color = PCR_final),
+      position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8),
+      size = 1.5, alpha = 0.3
+    ) +
+    scale_color_manual(
+      values = c("P. vivax only"     = "darkgreen",
+                 "P. falciparum only" = "#0067B9",
+                 "No malaria"         = "darkgray"),
+      name = NULL
+    ) +
+    scale_y_continuous(breaks = seq(0, 20, by = 1), limits = c(0, 20)) +
+    labs(y = "G6PD enzyme activity (UI/gHb)", x = NULL) +
+    theme_classic() +
+    theme(
+      legend.position      = c(0.8, 0.9),
+      legend.direction     = "vertical",
+      legend.justification = "center",
+      legend.background    = element_rect(fill = "transparent"),
+      legend.key.size      = unit(1.2, "lines"),
+      axis.text.x          = element_text(size = 9),
+      axis.text.y          = element_text(size = 8),
+      axis.title.y         = element_text(size = 9),
+      legend.text          = element_text(size = 9)
+    )
+
+  ggsave("Fig4B.tif", grap10,
+         width = 17.4, height = 10.0, units = "cm",
+         dpi = 300, compression = "lzw", device = "tiff")
+
+  message("Fig4B.tif exported — 17.4 x 10.0 cm, 300 dpi, LZW compression")
+}
+
+# --- Composed Figure 4: Panel A (left) | Panel B (right) ---
+# Format : TIFF, LZW, 300 dpi
+# Width  : 17.4 cm (two-column) | Height: 10.0 cm
+# File   : Fig4.tif — update name to match manuscript citation
+{
+  composicion_fig4 <- plot_grid(
+    grap6, grap10,
+    ncol       = 2,
+    labels     = c("A", "B"),
+    align      = "h",
+    rel_widths = c(1, 1)
+  )
+
+  ggsave(
+    filename    = "Fig4.tif",
+    plot        = composicion_fig4,
+    width       = 17.4,
+    height      = 10.0,
+    units       = "cm",
+    dpi         = 300,
+    compression = "lzw",
+    device      = "tiff"
+  )
+
+  message("Fig4.tif exported — 17.4 x 10.0 cm, 300 dpi, LZW compression")
+}
+
+
+# ==============================================================================
+# SECTION 5 — Figure 3 (Fig5 in original): malaria prevalence by G6PD status
+# ------------------------------------------------------------------------------
+# Restricted to General population (lugar == 1) and Outpatients (lugar == 2).
+# Mixed infections and unidentified species excluded (PCR_final %in% c(2, 3)).
+# Proportion = cases per PCR_final / total per lugar × FI5457 group.
+# ==============================================================================
+
+{
+  # Base dataset: two sites, non-missing enzyme activity
+  df_fig3 <- df %>%
+    filter(!is.na(FI5356), lugar %in% c(1, 2)) %>%
+    mutate(
+      lugar  = factor(lugar,
+                      levels = c(1, 2),
+                      labels = c("General population", "Outpatients")),
+      FI5457 = factor(FI5457,
+                      levels = c(3, 2, 1),
+                      labels = c("Deficient", "Intermediate", "Normal"))
+    )
+
+  # Case count per PCR_final category within each lugar × FI5457 group
+  casos_virus <- df_fig3 %>%
+    filter(!is.na(PCR_final), PCR_final %in% c(1, 4, 5)) %>%
+    mutate(PCR_final = factor(PCR_final,
+                              levels = c(1, 5, 4),
+                              labels = c("No malaria", "P. vivax", "P. falciparum"))) %>%
+    group_by(lugar, FI5457, PCR_final) %>%
+    summarise(casos_virus = n(), .groups = "drop")
+
+  # Total cases per lugar × FI5457 group (denominator)
+  total_por_grupo <- df_fig3 %>%
+    group_by(lugar, FI5457) %>%
+    summarise(total_casos = n(), .groups = "drop")
+
+  # Prevalence = cases / total per group
+  prevalencia <- casos_virus %>%
+    left_join(total_por_grupo, by = c("lugar", "FI5457")) %>%
+    mutate(prevalencia = casos_virus / total_casos)
+}
+
+{
+  grap11 <- ggplot(prevalencia,
+                   aes(x = PCR_final, y = prevalencia, fill = PCR_final)) +
+    geom_col() +
+    geom_text(
+      aes(label = paste0("n=", casos_virus, "\n", round(prevalencia * 100, 1), "%")),
+      vjust = -0.3,
+      size  = 2.5
+    ) +
+    facet_grid(lugar ~ FI5457) +
+    scale_fill_manual(
+      values = c("No malaria"    = "darkgray",
+                 "P. vivax"      = "darkgreen",
+                 "P. falciparum" = "#0067B9")
+    ) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.22))) +
+    labs(y = "Proportion (%)", x = "Species", fill = NULL) +
+    theme_classic() +
+    theme(
+      axis.text.x          = element_blank(),
+      axis.ticks.x         = element_blank(),
+      axis.text.y          = element_text(size = 8),
+      axis.title.y         = element_text(size = 9),
+      axis.title.x         = element_text(size = 9),
+      legend.position      = "right",
+      legend.direction     = "vertical",
+      legend.justification = "center",
+      legend.background    = element_rect(fill = "transparent"),
+      legend.key.size      = unit(1.2, "lines"),
+      legend.text          = element_text(size = 8),
+      strip.text           = element_text(size = 8)
+    )
+
+  ggsave(
+    filename    = "Fig3.tif",
+    plot        = grap11,
+    width       = 17.4,
+    height      = 12.0,
+    units       = "cm",
+    dpi         = 300,
+    compression = "lzw",
+    device      = "tiff"
+  )
+
+  message("Fig3.tif exported — 17.4 x 12.0 cm, 300 dpi, LZW compression")
+}
+
+
+# ==============================================================================
+# SECTION 6 — Figure S2: G6PD enzyme activity by study population (boxplot)
+# ------------------------------------------------------------------------------
+# Same four-group structure as Fig 1.
+# Single panel — no sex stratification.
+# ==============================================================================
+
+{
+  # All three recruitment sites
+  ar_s2 <- df %>%
+    select(id_compuesto, lugar, PCR06r, FI5356, FI5457, PCR_final) %>%
+    filter(!is.na(PCR06r), !is.na(FI5356))
+
+  # Afro-Colombian subset from diagnostic post — assigned temporary code 4
+  acd_s2 <- df %>%
+    select(id_compuesto, etnia, PCR06r, FI5356, FI5457, lugar, PCR_final) %>%
+    filter(!is.na(PCR06r), !is.na(FI5356), lugar == 2, etnia == 1) %>%
+    select(-lugar) %>%
+    rename(lugar = etnia) %>%
+    mutate(lugar = 4)
+
+  # Stack and label
+  df_s2 <- rbind(ar_s2, acd_s2) %>%
+    mutate(lugar = factor(lugar,
+                          levels = c(1, 3, 2, 4),
+                          labels = c("General population",
+                                     "Indigenous",
+                                     "Outpatients",
+                                     "Outpatients restricted to Afro-Colombians")))
+}
+
+{
+  grapS2 <- ggplot(df_s2, aes(x = str_wrap(lugar, width = 15), y = FI5356)) +
+    geom_boxplot(
+      aes(color = lugar),
+      fill          = NA,
+      width         = 0.4,
+      position      = position_dodge(width = 0.8),
+      outlier.shape = NA
+    ) +
+    geom_jitter(
+      aes(color = lugar),
+      position = position_jitterdodge(jitter.width = 0.4, dodge.width = 0.8),
+      size  = 1.5,
+      alpha = 0.3
+    ) +
+    scale_color_manual(
+      values = c("General population"                        = "#BA0C2F",
+                 "Indigenous"                                = "#0067B9",
+                 "Outpatients"                               = "black",
+                 "Outpatients restricted to Afro-Colombians" = "darkgreen"),
+      name = NULL
+    ) +
+    scale_y_continuous(breaks = seq(0, 20, by = 1), limits = c(0, 20)) +
+    labs(y = "G6PD enzyme activity (UI/gHb)", x = "Study population") +
+    theme_classic() +
+    theme(
+      legend.position = "none",
+      axis.text.x     = element_text(size = 8),
+      axis.text.y     = element_text(size = 8),
+      axis.title.x    = element_text(size = 9),
+      axis.title.y    = element_text(size = 9)
+    )
+
+  ggsave(
+    filename    = "FigS2.tif",
+    plot        = grapS2,
+    width       = 17.0,
+    height      = 12.0,
+    units       = "cm",
+    dpi         = 300,
+    compression = "lzw",
+    device      = "tiff"
+  )
+
+  message("FigS2.tif exported — 10.0 x 12.0 cm, 300 dpi, LZW compression")
+}
+
+
+# ==============================================================================
+# SECTION 7 — Figure S_BA: Bland-Altman agreement plots
+# ------------------------------------------------------------------------------
+# Panel A: G6PD enzyme activity — first vs. final measurement
+# Panel B: Hemoglobin — first vs. final measurement
+# Only rows where both measurements exist AND differ are included.
+# ==============================================================================
+
+# Helper: compute Bland-Altman summary statistics
+ba_limits <- function(data) {
+  list(
+    bias   = mean(data$diferencia),
+    sd     = sd(data$diferencia),
+    loa_hi = mean(data$diferencia) + 1.96 * sd(data$diferencia),
+    loa_lo = mean(data$diferencia) - 1.96 * sd(data$diferencia)
+  )
+}
+
+# Helper: build one Bland-Altman panel
+make_ba_plot <- function(data, x_label, y_label) {
+  lim   <- ba_limits(data)
+  y_lo  <- lim$bias - 9.5 * lim$sd
+  y_hi  <- lim$bias + 9.5 * lim$sd
+  x_ann <- quantile(data$promedio, 0.95, na.rm = TRUE)
+
+  ggplot(data, aes(x = promedio, y = diferencia)) +
+    geom_point(pch = 1, size = 1.2, col = "black", alpha = 0.6) +
+    geom_smooth(method = "lm", se = TRUE,
+                fill = "lightgrey", linewidth = 0.4, linetype = 5) +
+    geom_hline(yintercept = lim$bias,   linewidth = 1.0) +
+    geom_hline(yintercept = 0,          linetype = 3, col = "grey30") +
+    geom_hline(yintercept = lim$loa_hi, linetype = 2, col = "firebrick") +
+    geom_hline(yintercept = lim$loa_lo, linetype = 2, col = "firebrick") +
+    annotate("text", x = x_ann, y = lim$bias   + 0.3,
+             label = "Bias",     size = 2.5, colour = "black",     hjust = 1) +
+    annotate("text", x = x_ann, y = lim$loa_hi + 0.3,
+             label = "+ 1.96 SD", size = 2.5, colour = "firebrick", hjust = 1) +
+    annotate("text", x = x_ann, y = lim$loa_lo - 0.3,
+             label = "- 1.96 SD", size = 2.5, colour = "firebrick", hjust = 1) +
+    ylim(y_lo, y_hi) +
+    labs(x = x_label, y = y_label) +
+    theme_bw() +
+    theme(
+      plot.title       = element_text(hjust = 0.5),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text.x      = element_text(size = 8),
+      axis.text.y      = element_text(size = 8),
+      axis.title.x     = element_text(size = 9),
+      axis.title.y     = element_text(size = 9)
+    )
+}
+
+{
+  # NOTE: uses `df_full` (NO 8-ID exclusion), unlike every other figure in
+  # this script -- see Section 1 header comment for the reason.
+  # G6PD dataset
+  ba_g6pd <- df_full %>%
+    select(FI0053, FI5356) %>%
+    filter(complete.cases(.)) %>%
+    mutate(
+      diferencia = FI0053 - FI5356,
+      promedio   = rowMeans(cbind(FI0053, FI5356), na.rm = TRUE)
+    ) %>%
+    filter(FI0053 != FI5356)
+
+  # Hemoglobin dataset
+  ba_hemo <- df_full %>%
+    select(FI0055, FI5558) %>%
+    filter(complete.cases(.)) %>%
+    mutate(
+      diferencia = FI0055 - FI5558,
+      promedio   = rowMeans(cbind(FI0055, FI5558), na.rm = TRUE)
+    ) %>%
+    filter(FI0055 != FI5558)
+
+  plot_g6pd <- make_ba_plot(ba_g6pd,
+                             x_label = "Mean G6PD (UI/gHb)",
+                             y_label = "Difference G6PD (UI/gHb)")
+
+  plot_hemo <- make_ba_plot(ba_hemo,
+                             x_label = "Mean Hb (g/dL)",
+                             y_label = "Difference Hb (g/dL)")
+
+  composicion_ba <- plot_grid(
+    plot_g6pd, plot_hemo,
+    ncol       = 2,
+    labels     = c("A", "B"),
+    align      = "h",
+    rel_widths = c(1, 1)
+  )
+
+  ggsave(
+    filename    = "FigS_BA.tif",
+    plot        = composicion_ba,
+    width       = 17.4,
+    height      = 9.0,
+    units       = "cm",
+    dpi         = 300,
+    compression = "lzw",
+    device      = "tiff"
+  )
+
+  message("FigS_BA.tif exported — 17.4 x 9.0 cm, 300 dpi, LZW compression")
+}
+
+# ==============================================================================
+# END OF SCRIPT
+# ==============================================================================
