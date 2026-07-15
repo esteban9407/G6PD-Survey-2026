@@ -7,19 +7,28 @@
 # CREATED  : 2025
 # UPDATED  : 2026
 # ------------------------------------------------------------------------------
-# PURPOSE  : Generate publication-ready figures (Fig 1, Fig 3, Fig 4, Fig S2,
-#            Fig S_BA) from the bd_G6PDSurvey_2026 dataset.
+# PURPOSE  : Generate publication-ready figures (Fig 3, Fig 4, Fig 5, S1 Fig,
+#            S2 Fig) from the bd_G6PDSurvey_2026 dataset.
 #            All figures comply with PLOS Global Public Health submission
 #            requirements (TIFF, LZW, 300 dpi, Arial 8–12 pt).
 # ------------------------------------------------------------------------------
 # INPUT    : bd_G6PDSurvey_2026 — object already loaded in the R environment,
 #            RAW (participant exclusions are NOT pre-applied). This script
 #            applies the 8-ID exclusion itself (Section 1), the same one
-#            used in pipeline_tables_2.R -- with ONE exception: Fig S_BA
+#            used in pipeline_tables_2.R -- with ONE exception: S1 Fig
 #            (Bland-Altman, Section 7) intentionally uses the FULL,
 #            non-excluded dataset. See Section 1 for the reason.
-# OUTPUT   : Fig1.tif | Fig3.tif | Fig4A.tif | Fig4B.tif | Fig4.tif | FigS2.tif |
-#            FigS_BA.tif
+# OUTPUT   : Fig3.tif | Fig4A.tif | Fig4B.tif | Fig4.tif | Fig5.tif |
+#            FigS1.tif | FigS2.tif
+# ------------------------------------------------------------------------------
+# FIGURE NUMBERING — relación Figura (documento) <-> Sección (código) <-> Archivo
+#   Fig 3   | Section 3 | Fig3.tif           | Density plots, G6PD by sex/site
+#   Fig 4   | Section 4 | Fig4.tif           | Boxplot, G6PD by malaria status/species
+#   Fig 5   | Section 5 | Fig5.tif           | Bar chart, malaria proportion by G6PD status
+#   S1 Fig  | Section 7 | FigS1.tif          | Bland-Altman (G6PD & hemoglobin)
+#   S2 Fig  | Section 6 | FigS2.tif          | Boxplot, G6PD by 4 study populations
+#   Verificado contra el documento el 2026-07-14. Si se agrega o renumera una
+#   figura, actualizar esta tabla en el mismo commit.
 # ==============================================================================
 
 
@@ -58,9 +67,9 @@ options(scipen = 999)
 #
 #           TWO working copies are used:
 #             - `df`      : sentinel-NA replaced + 8-ID exclusion applied.
-#                           Used by Fig 1, Fig 4, Fig 3 (Section 5), Fig S2.
+#                           Used by Fig 3 (Section 3), Fig 4, Fig 5 (Section 5), S2 Fig.
 #             - `df_full` : sentinel-NA replaced ONLY, NO exclusion applied.
-#                           Used ONLY by Fig S_BA (Bland-Altman, Section 7).
+#                           Used ONLY by S1 Fig (Bland-Altman, Section 7).
 # ==============================================================================
 
 # DATA DICTIONARY — variables used across all figures
@@ -89,7 +98,7 @@ options(scipen = 999)
   df[df == -999 | df == -9999 | df == 999] <- NA
 
   # `df_full`: same sentinel-NA cleanup, but WITHOUT the 8-ID exclusion below.
-  # Used only by Fig S_BA (Bland-Altman, Section 7) -- see note above.
+  # Used only by S1 Fig (Bland-Altman, Section 7) -- see note above.
   df_full <- df
 
   # Participant exclusion -- applies to `df` (all figures except Bland-Altman).
@@ -102,7 +111,7 @@ options(scipen = 999)
 
 
 # ==============================================================================
-# SECTION 2 — Shared visual elements (used across Fig 1, Fig S2)
+# SECTION 2 — Shared visual elements (used across Fig 3, S2 Fig)
 # ==============================================================================
 
 # Helper: builds the legend label vector for a given subset.
@@ -147,7 +156,7 @@ pal_color <- c("1" = "#BA0C2F", "2" = "#0067B9")
 
 
 # ==============================================================================
-# SECTION 3 — Figure 1: G6PD enzyme activity density plots by sex and site
+# SECTION 3 — Figure 3: G6PD enzyme activity density plots by sex and site
 # ------------------------------------------------------------------------------
 # Four panels stacked vertically (A–D), exported as a single TIFF.
 # Panel A: Urban neighborhood / district of Quibdó  (lugar == 1)
@@ -311,7 +320,7 @@ pal_color <- c("1" = "#BA0C2F", "2" = "#0067B9")
   )
 
   ggsave(
-    filename    = "Fig1.tif",
+    filename    = "Fig3.tif",
     plot        = composicion_fig1,
     width       = 17.4,
     height      = 22.0,
@@ -321,7 +330,7 @@ pal_color <- c("1" = "#BA0C2F", "2" = "#0067B9")
     device      = "tiff"
   )
 
-  message("Fig1.tif exported — 17.4 x 22.0 cm, 300 dpi, LZW compression")
+  message("Fig3.tif exported — 17.4 x 22.0 cm, 300 dpi, LZW compression")
 }
 
 
@@ -484,7 +493,7 @@ pal_color <- c("1" = "#BA0C2F", "2" = "#0067B9")
 
 
 # ==============================================================================
-# SECTION 5 — Figure 3 (Fig5 in original): malaria prevalence by G6PD status
+# SECTION 5 — Figure 5: malaria prevalence by G6PD status
 # ------------------------------------------------------------------------------
 # Restricted to General population (lugar == 1) and Outpatients (lugar == 2).
 # Mixed infections and unidentified species excluded (PCR_final %in% c(2, 3)).
@@ -493,7 +502,7 @@ pal_color <- c("1" = "#BA0C2F", "2" = "#0067B9")
 
 {
   # Base dataset: two sites, non-missing enzyme activity
-  df_fig3 <- df %>%
+  df_fig5 <- df %>%
     filter(!is.na(FI5356), lugar %in% c(1, 2)) %>%
     mutate(
       lugar  = factor(lugar,
@@ -505,7 +514,7 @@ pal_color <- c("1" = "#BA0C2F", "2" = "#0067B9")
     )
 
   # Case count per PCR_final category within each lugar × FI5457 group
-  casos_virus <- df_fig3 %>%
+  casos_virus <- df_fig5 %>%
     filter(!is.na(PCR_final), PCR_final %in% c(1, 4, 5)) %>%
     mutate(PCR_final = factor(PCR_final,
                               levels = c(1, 5, 4),
@@ -514,7 +523,7 @@ pal_color <- c("1" = "#BA0C2F", "2" = "#0067B9")
     summarise(casos_virus = n(), .groups = "drop")
 
   # Total cases per lugar × FI5457 group (denominator)
-  total_por_grupo <- df_fig3 %>%
+  total_por_grupo <- df_fig5 %>%
     group_by(lugar, FI5457) %>%
     summarise(total_casos = n(), .groups = "drop")
 
@@ -558,7 +567,7 @@ pal_color <- c("1" = "#BA0C2F", "2" = "#0067B9")
     )
 
   ggsave(
-    filename    = "Fig3.tif",
+    filename    = "Fig5.tif",
     plot        = grap11,
     width       = 17.4,
     height      = 12.0,
@@ -568,7 +577,7 @@ pal_color <- c("1" = "#BA0C2F", "2" = "#0067B9")
     device      = "tiff"
   )
 
-  message("Fig3.tif exported — 17.4 x 12.0 cm, 300 dpi, LZW compression")
+  message("Fig5.tif exported — 17.4 x 12.0 cm, 300 dpi, LZW compression")
 }
 
 
@@ -652,7 +661,7 @@ pal_color <- c("1" = "#BA0C2F", "2" = "#0067B9")
 
 
 # ==============================================================================
-# SECTION 7 — Figure S_BA: Bland-Altman agreement plots
+# SECTION 7 — S1 Fig: Bland-Altman agreement plots
 # ------------------------------------------------------------------------------
 # Panel A: G6PD enzyme activity — first vs. final measurement
 # Panel B: Hemoglobin — first vs. final measurement
@@ -744,7 +753,7 @@ make_ba_plot <- function(data, x_label, y_label) {
   )
 
   ggsave(
-    filename    = "FigS_BA.tif",
+    filename    = "FigS1.tif",
     plot        = composicion_ba,
     width       = 17.4,
     height      = 9.0,
@@ -754,7 +763,7 @@ make_ba_plot <- function(data, x_label, y_label) {
     device      = "tiff"
   )
 
-  message("FigS_BA.tif exported — 17.4 x 9.0 cm, 300 dpi, LZW compression")
+  message("FigS1.tif exported — 17.4 x 9.0 cm, 300 dpi, LZW compression")
 }
 
 # ==============================================================================
