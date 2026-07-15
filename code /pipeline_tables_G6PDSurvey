@@ -115,8 +115,12 @@ options(scipen = 999)
   # Replace all sentinel missing values with NA
   df[df == -999 | df == -9999 | df == 999] <- NA
 
-  # Participant exclusion -- applies to ALL tables in this script
-  # (Table 1, Table 2, S1-S4 Tables, Table 3).
+  # df_full: sentinel-cleaned data BEFORE participant exclusion.
+  # Used only by Table 1, which reports the total study population.
+  df_full <- df
+
+  # Participant exclusion -- applies to Table 2, S1-S4 Tables, and Table 3.
+  # Table 1 is the exception: it uses df_full (total, unexcluded) above.
   exclude_ids <- c("10112701", "800127", "800032", "50214001",
                    "9051803", "10333502", "50104501", "700219")
   df$id_compuesto_chr <- trimws(as.character(df$id_compuesto))
@@ -157,7 +161,7 @@ options(scipen = 999)
 
 # --- Data subsets ---
 {
-  df_t1 <- df
+  df_t1 <- df_full  # Table 1 reports the TOTAL study population (no exclusion)
 
   # Impute ethnicity for Indigenous community participants (by design, all are Indigenous)
   df_t1$etnia[df_t1$lugar == 3 & is.na(df_t1$etnia)] <- 3L
@@ -624,9 +628,9 @@ header_row_t2 <- function(label) make_row_t2(label, "", "", "", "")
   g2_s1 <- df_s1 %>% filter(lugar == 3)
   g3_s1 <- df_s1 %>% filter(lugar == 2)
 
-  col_s1_g1 <- paste0("General population, Group 1 (n=", nrow(g1_s1), ") % Plasmodium positive (95% CI)")
-  col_s1_g2 <- paste0("Indigenous population, Group 2 (n=", nrow(g2_s1), ") % Plasmodium positive (95% CI)")
-  col_s1_g3 <- paste0("Outpatients, Group 3 (n=", nrow(g3_s1), ") % Plasmodium positive (95% CI)")
+  col_s1_g1 <- paste0("General population,\nGroup 1\n(n=", nrow(g1_s1), ")\n% Plasmodium positive\n(95% CI)")
+  col_s1_g2 <- paste0("Indigenous population,\nGroup 2\n(n=", nrow(g2_s1), ")\n% Plasmodium positive\n(95% CI)")
+  col_s1_g3 <- paste0("Outpatients,\nGroup 3\n(n=", nrow(g3_s1), ")\n% Plasmodium positive\n(95% CI)")
 }
 
 # --- Helper functions ---
@@ -808,9 +812,9 @@ header_row_s1 <- function(label) make_row_s1(label, "", "", "")
   g_int_ae  <- g_int  %>% filter(FI0041 == 1)
   g_norm_ae <- g_norm %>% filter(FI0041 == 1)
 
-  col_def  <- paste0("Deficient (n=",    nrow(g_def),  ")")
-  col_int  <- paste0("Intermediate (n=", nrow(g_int),  ")")
-  col_norm <- paste0("Normal (n=",       nrow(g_norm), ")")
+  col_def  <- paste0("Deficient\n(n=",    nrow(g_def),  ")")
+  col_int  <- paste0("Intermediate\n(n=", nrow(g_int),  ")")
+  col_norm <- paste0("Normal\n(n=",       nrow(g_norm), ")")
 }
 
 # --- Helper functions ---
@@ -959,15 +963,9 @@ header_row_s2 <- function(label) make_row_s2(label, "", "", "")
   n_g4_int  <- nrow(g4_s3 %>% filter(FI5457 == 2))
   n_g4_def  <- nrow(g4_s3 %>% filter(FI5457 == 3))
 
-  c_g1n <- paste0("General population\nNormal\n(n=",                             n_g1_norm, ")\n% (95% CI)")
-  c_g1i <- paste0("General population\nInt\n(n=",                                n_g1_int,  ")\n% (95% CI)")
-  c_g1d <- paste0("General population\nDeficient\n(n=",                          n_g1_def,  ")\n% (95% CI)")
-  c_g3n <- paste0("Outpatients\nNormal\n(n=",                                    n_g3_norm, ")\n% (95% CI)")
-  c_g3i <- paste0("Outpatients\nInt\n(n=",                                       n_g3_int,  ")\n% (95% CI)")
-  c_g3d <- paste0("Outpatients\nDeficient\n(n=",                                 n_g3_def,  ")\n% (95% CI)")
-  c_g4n <- paste0("Outpatients restricted to Afro-Colombians\nNormal\n(n=",      n_g4_norm, ")\n% (95% CI)")
-  c_g4i <- paste0("Outpatients restricted to Afro-Colombians\nInt\n(n=",         n_g4_int,  ")\n% (95% CI)")
-  c_g4d <- paste0("Outpatients restricted to Afro-Colombians\nDeficient\n(n=",   n_g4_def,  ")\n% (95% CI)")
+  # Note: n_g1_norm..n_g4_def are kept for reference/validation, but per the
+  # published S3 Table the header does NOT display n= per subgroup (see export
+  # block below, which builds a true 3-row merged Excel header instead).
 }
 
 # --- Helper functions ---
@@ -1012,7 +1010,9 @@ cell_svy_s3 <- function(design, fi5457_val, pcr_vals) {
 {
   make_row_s3 <- function(label, vals) {
     row <- as.list(vals)
-    names(row) <- c(c_g1n, c_g1i, c_g1d, c_g3n, c_g3i, c_g3d, c_g4n, c_g4i, c_g4d)
+    names(row) <- c("v_g1_norm", "v_g1_int", "v_g1_def",
+                     "v_g3_norm", "v_g3_int", "v_g3_def",
+                     "v_g4_norm", "v_g4_int", "v_g4_def")
     tibble(Variable = label, !!!row)
   }
 
@@ -1046,23 +1046,53 @@ cell_svy_s3 <- function(design, fi5457_val, pcr_vals) {
     rows = 1, cols = 1)
   setRowHeights(wb, "S3 Table", rows = 1, heights = 30)
 
-  writeData(wb, "S3 Table", rows_s3, startRow = 3, startCol = 1, colNames = TRUE)
+  # --- 3-row merged header, matching the published S3 Table layout ---
+  # Row 3: group name (merged over its 3 status columns). Row 4: Normal/Int/
+  # Deficient. Row 5: "% (95% CI)". No n= is shown here (not in the published
+  # header) -- n_g1_norm..n_g4_def above remain available for validation.
+  header_row_group  <- 3
+  header_row_status <- 4
+  header_row_ci     <- 5
+  data_start_row    <- 6
+
+  writeData(wb, "S3 Table", "Variable", startRow = header_row_group, startCol = 1)
+  mergeCells(wb, "S3 Table", cols = 1, rows = header_row_group:header_row_ci)
+
+  writeData(wb, "S3 Table", "General population",
+            startRow = header_row_group, startCol = 2)
+  writeData(wb, "S3 Table", "Outpatients",
+            startRow = header_row_group, startCol = 5)
+  writeData(wb, "S3 Table", "Outpatients restricted to Afro-Colombians",
+            startRow = header_row_group, startCol = 8)
+  mergeCells(wb, "S3 Table", cols = 2:4,  rows = header_row_group)
+  mergeCells(wb, "S3 Table", cols = 5:7,  rows = header_row_group)
+  mergeCells(wb, "S3 Table", cols = 8:10, rows = header_row_group)
+
+  writeData(wb, "S3 Table",
+    t(rep(c("Normal", "Int", "Deficient"), 3)),
+    startRow = header_row_status, startCol = 2, colNames = FALSE)
+
+  writeData(wb, "S3 Table",
+    t(rep("% (95% CI)", 9)),
+    startRow = header_row_ci, startCol = 2, colNames = FALSE)
+
+  writeData(wb, "S3 Table", rows_s3, startRow = data_start_row, startCol = 1, colNames = FALSE)
 
   addStyle(wb, "S3 Table",
     createStyle(fontSize = 9, fontName = "Arial", textDecoration = "bold",
-                halign = "center", border = "TopBottom", wrapText = TRUE),
-    rows = 3, cols = 1:10, gridExpand = TRUE)
-  setRowHeights(wb, "S3 Table", rows = 3, heights = 60)
+                halign = "center", valign = "center", border = "TopBottom", wrapText = TRUE),
+    rows = header_row_group:header_row_ci, cols = 1:10, gridExpand = TRUE)
+  setRowHeights(wb, "S3 Table", rows = header_row_group:header_row_ci, heights = 20)
 
   addStyle(wb, "S3 Table",
     createStyle(fontSize = 9, fontName = "Arial", wrapText = TRUE),
-    rows = 4:(nrow(rows_s3) + 3), cols = 1:10, gridExpand = TRUE)
+    rows = data_start_row:(data_start_row + nrow(rows_s3) - 1), cols = 1:10, gridExpand = TRUE)
 
   setColWidths(wb, "S3 Table", cols = 1,    widths = 20)
   setColWidths(wb, "S3 Table", cols = 2:10, widths = 18)
-  freezePane(wb, "S3 Table", firstRow = TRUE)
+  freezePane(wb, "S3 Table", firstActiveRow = data_start_row, firstActiveCol = 2)
 
-  fn_row <- nrow(rows_s3) + 5
+  fn_row <- data_start_row + nrow(rows_s3) + 1
   writeData(wb, "S3 Table",
     "Int: Intermediate. CI: Confidence Interval. * Estimates consider sample weights.",
     startRow = fn_row, startCol = 1)
@@ -1454,14 +1484,18 @@ make_row_t3 <- function(label, g1c, g1a, g3c, g3a, g4c, g4a) {
 
 # --- Column names ---
 {
-  col_s4_g1 <- paste0("General population (Group 1, n=", n_s4_g1, ") \u2014 exp(\u03b2) adjusted")
-  col_s4_g1_ci <- paste0("General population (Group 1, n=", n_s4_g1, ") \u2014 CI 95%")
+  col_s4_g1    <- "v_g1_est"
+  col_s4_g1_ci <- "v_g1_ci"
+  col_s4_g3    <- "v_g3_est"
+  col_s4_g3_ci <- "v_g3_ci"
+  col_s4_g4    <- "v_g4_est"
+  col_s4_g4_ci <- "v_g4_ci"
 
-  col_s4_g3 <- paste0("Outpatients (Group 3, n=", n_s4_g3, ") \u2014 exp(\u03b2) adjusted")
-  col_s4_g3_ci <- paste0("Outpatients (Group 3, n=", n_s4_g3, ") \u2014 CI 95%")
-
-  col_s4_g4 <- paste0("...restricted to Afro-Colombians (n=", n_s4_g4, ") \u2014 exp(\u03b2) adjusted")
-  col_s4_g4_ci <- paste0("...restricted to Afro-Colombians (n=", n_s4_g4, ") \u2014 CI 95%")
+  # Descriptive group headers, built to match the published S4 Table wording
+  # exactly (used only at export time, in the merged header row below).
+  hdr_s4_g1 <- paste0("exp(\u03b2) adjusted (general population, group 1, n=", n_s4_g1, ")")
+  hdr_s4_g3 <- paste0("exp(\u03b2) adjusted (Outpatients with suspected malaria, group 3, n=", n_s4_g3, ")")
+  hdr_s4_g4 <- paste0("exp(\u03b2) adjusted (Outpatients with suspected malaria restricted to Afro-Colombians, n=", n_s4_g4, ")")
 }
 
 make_row_s4 <- function(label, g1, g3, g4) {
@@ -1528,23 +1562,44 @@ make_row_s4 <- function(label, g1, g3, g4) {
     rows = 1, cols = 1)
   setRowHeights(wb, "S4 Table", rows = 1, heights = 30)
 
-  writeData(wb, "S4 Table", rows_s4, startRow = 3, startCol = 1, colNames = TRUE)
+  # --- 2-row merged header, matching the published S4 Table layout ---
+  # Row 3: descriptive group header (merged over its Estimates/CI 95% pair).
+  # Row 4: "Factors" (merged vertically) / "Estimates" / "CI 95%" per group.
+  header_row_group <- 3
+  header_row_sub   <- 4
+  data_start_row   <- 5
+
+  writeData(wb, "S4 Table", "Factors", startRow = header_row_group, startCol = 1)
+  mergeCells(wb, "S4 Table", cols = 1, rows = header_row_group:header_row_sub)
+
+  writeData(wb, "S4 Table", hdr_s4_g1, startRow = header_row_group, startCol = 2)
+  writeData(wb, "S4 Table", hdr_s4_g3, startRow = header_row_group, startCol = 4)
+  writeData(wb, "S4 Table", hdr_s4_g4, startRow = header_row_group, startCol = 6)
+  mergeCells(wb, "S4 Table", cols = 2:3, rows = header_row_group)
+  mergeCells(wb, "S4 Table", cols = 4:5, rows = header_row_group)
+  mergeCells(wb, "S4 Table", cols = 6:7, rows = header_row_group)
+
+  writeData(wb, "S4 Table",
+    t(rep(c("Estimates", "CI 95%"), 3)),
+    startRow = header_row_sub, startCol = 2, colNames = FALSE)
+
+  writeData(wb, "S4 Table", rows_s4, startRow = data_start_row, startCol = 1, colNames = FALSE)
 
   addStyle(wb, "S4 Table",
     createStyle(fontSize = 9, fontName = "Arial", textDecoration = "bold",
-                halign = "center", border = "TopBottom", wrapText = TRUE),
-    rows = 3, cols = 1:7, gridExpand = TRUE)
-  setRowHeights(wb, "S4 Table", rows = 3, heights = 60)
+                halign = "center", valign = "center", border = "TopBottom", wrapText = TRUE),
+    rows = header_row_group:header_row_sub, cols = 1:7, gridExpand = TRUE)
+  setRowHeights(wb, "S4 Table", rows = header_row_group:header_row_sub, heights = 30)
 
   addStyle(wb, "S4 Table",
     createStyle(fontSize = 9, fontName = "Arial", wrapText = TRUE),
-    rows = 4:(nrow(rows_s4) + 3), cols = 1:7, gridExpand = TRUE)
+    rows = data_start_row:(data_start_row + nrow(rows_s4) - 1), cols = 1:7, gridExpand = TRUE)
 
   setColWidths(wb, "S4 Table", cols = 1,    widths = 45)
   setColWidths(wb, "S4 Table", cols = 2:7,  widths = 18)
-  freezePane(wb, "S4 Table", firstRow = TRUE)
+  freezePane(wb, "S4 Table", firstActiveRow = data_start_row, firstActiveCol = 2)
 
-  fn_row <- nrow(rows_s4) + 5
+  fn_row <- data_start_row + nrow(rows_s4) + 1
   writeData(wb, "S4 Table",
     "*Adjusted by ethnic group, sex and prior history of malaria.",
     startRow = fn_row, startCol = 1)
