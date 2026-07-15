@@ -9,7 +9,7 @@ This repository contains the analytical code underlying the findings reported in
 
 > *Prevalence of glucose-6-phosphate dehydrogenase (G6PD) deficiency in a malaria endemic malaria region of Colombia: implications for radical cure of Plasmodium vivax* — submitted to PLOS Global Public Health, 2026.
 
-The study assessed the prevalence and distribution of glucose-6-phosphate dehydrogenase (G6PD) deficiency in three population groups in the Chocó department, Colombia: a general urban population (Quibdó), indigenous communities, and outpatients at malaria diagnostic posts.
+The primary objective of this study was to estimate the prevalence of G6PDd phenotypes in Quibdó, a highly malaria endemic region of Colombia, across three different populations: the largely Afro-Colombian general population, indigenous communities, and outpatients with suspected malaria. A secondary objective was to explore the relationship between G6PDd and the risk of Plasmodium infection..
 
 **This repository contains CODE ONLY.** Per PLOS Global Public Health's distinct policies for [data availability](https://journals.plos.org/globalpublichealth/s/data-availability) and [materials/software/code sharing](https://journals.plos.org/globalpublichealth/s/materials-software-and-code-sharing), the dataset and its data dictionary/codebook are deposited separately in Zenodo (see **Data access** below), each governed by its own repository and DOI.
 
