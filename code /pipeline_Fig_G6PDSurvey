@@ -27,8 +27,6 @@
 #   Fig 5   | Section 5 | Fig5.tif           | Bar chart, malaria proportion by G6PD status
 #   S1 Fig  | Section 7 | FigS1.tif          | Bland-Altman (G6PD & hemoglobin)
 #   S2 Fig  | Section 6 | FigS2.tif          | Boxplot, G6PD by 4 study populations
-#   Verificado contra el documento el 2026-07-14. Si se agrega o renumera una
-#   figura, actualizar esta tabla en el mismo commit.
 # ==============================================================================
 
 
