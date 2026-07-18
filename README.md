@@ -31,7 +31,7 @@ The primary objective of this study was to estimate the prevalence of G6PDd phen
 
 The anonymized dataset and its data dictionary/codebook (`codebook_G6PD_survey_2026_EN.xlsx`) are deposited separately in Zenodo, per PLOS's data availability policy:
 
-> **DOI:** [to be added upon deposit]
+> **DOI:** [https://zenodo.org/records/21404911]
 
 Access to the dataset requires agreeing to the terms of the data use agreement, given that the study involves human participants from vulnerable populations. Requests for access can be directed to the corresponding author.
 
